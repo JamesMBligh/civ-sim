@@ -26,6 +26,9 @@
   let world = null;
   let camera = createCamera();
   let selectedTribeId = null;
+  // Satellite overlays are off by default: the view shows only what is
+  // physically visible from above.
+  const overlays = { resources: false, settlements: false };
 
   function formatPop(n) {
     n = Math.round(n);
@@ -167,14 +170,14 @@
   // Full refresh: repaints the tile layer too (world or simulation changed).
   function refreshView() {
     const view = viewSelect.value;
-    renderWorld(world, canvas, view, camera, true);
+    renderWorld(world, canvas, view, camera, true, overlays);
     renderLegends(view);
     updateZoomUI();
   }
 
   // Cheap refresh for panning and zooming: reuses the cached tile layer.
   function redraw() {
-    renderWorld(world, canvas, viewSelect.value, camera, false);
+    renderWorld(world, canvas, viewSelect.value, camera, false, overlays);
     updateZoomUI();
   }
 
@@ -278,8 +281,27 @@
         `<span>${ERA_LABELS[era]}</span></div>`).join('');
       legendBTitle.textContent = '';
       resourceLegend.innerHTML = '';
+    } else if (view === 'satellite') {
+      legendATitle.textContent = 'Terrain';
+      terrainLegend.innerHTML = terrainSwatchRows() +
+        `<div class="legend-row"><span class="swatch" style="background: rgb(142,132,118)"></span><span>Built-up ground</span></div>` +
+        `<div class="legend-row"><span class="swatch" style="background: rgb(188,172,104)"></span><span>Worked fields</span></div>`;
+      legendBTitle.textContent = 'Overlays';
+      resourceLegend.innerHTML =
+        `<label class="legend-row toggle-row"><input type="checkbox" id="toggle-resources"${overlays.resources ? ' checked' : ''}> Resource markers</label>` +
+        `<label class="legend-row toggle-row"><input type="checkbox" id="toggle-settlements"${overlays.settlements ? ' checked' : ''}> Settlement markers</label>` +
+        (overlays.resources ? resourceSwatchRows() : '');
+      document.getElementById('toggle-resources').addEventListener('change', (ev) => {
+        overlays.resources = ev.target.checked;
+        redraw();
+        renderLegends('satellite');
+      });
+      document.getElementById('toggle-settlements').addEventListener('change', (ev) => {
+        overlays.settlements = ev.target.checked;
+        redraw();
+      });
     } else {
-      // satellite / elevation
+      // elevation
       legendATitle.textContent = 'Terrain';
       terrainLegend.innerHTML = terrainSwatchRows();
       legendBTitle.textContent = 'Resources';
