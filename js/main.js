@@ -107,8 +107,11 @@
     const p = t.progress;
     const posture = computePosture(t.traits);
     const era = ERA_LABELS[tribeEra(t)];
-    const arch = t.archetype === 'random' ? 'A people of their own kind'
+    let arch = t.archetype === 'random' ? 'A people of their own kind'
       : `${ARCHETYPES[t.archetype].label} archetype`;
+    if (t.parentId !== undefined && world.tribes[t.parentId]) {
+      arch = `Broke away from ${world.tribes[t.parentId].name}`;
+    }
 
     const traitRows = TRAIT_KEYS.map((key) =>
       `<div class="trait-row"><span class="trait-name">${TRAIT_LABELS[key]}</span>` +
@@ -137,6 +140,8 @@
       `<span>⚖ ${(posture.trade * 100).toFixed(0)}%</span>` +
       `<span>📜 ${(posture.learning * 100).toFixed(0)}%</span></div>` +
       traitRows +
+      `<div class="insp-section"><strong>Unity:</strong> ${(100 * (t.unity ?? 1)).toFixed(0)}%${
+        (t.unity ?? 1) < 0.35 ? ' — on the brink of civil war' : ''}</div>` +
       `<div class="insp-section"><strong>Leadership:</strong> ${
         (t.leaderBias || 0) > 0.12 ? 'war-hungry'
           : (t.leaderBias || 0) < -0.12 ? 'peace-minded' : 'steady'

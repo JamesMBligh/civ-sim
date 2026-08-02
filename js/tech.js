@@ -153,8 +153,10 @@ function updateKnowledge(world, tribe, pop, rng, seasonFactor) {
   const v = varianceRoll(rng, traits);
 
   // Surplus effort scales with sqrt(pop): bigger societies free more
-  // hands, with diminishing returns.
-  const surplus = Math.sqrt(Math.max(0, pop)) * seasonFactor * v;
+  // hands, with diminishing returns. A disunited polity squanders much
+  // of what it raises.
+  const surplus = Math.sqrt(Math.max(0, pop)) * seasonFactor * v *
+    (0.7 + 0.3 * (tribe.unity ?? 1));
   const prosperity = tribe.tradePartners > 0 ? 1.3 : 1.0;
 
   p.pools.tech += 0.15 * surplus * (2 * posture.learning) * (0.5 + traits.acumen);

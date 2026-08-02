@@ -292,10 +292,29 @@ function conquerSettlement(world, winner, loser, rel, log) {
     const d = (s.x - centre.x) ** 2 + (s.y - centre.y) ** 2;
     if (d < bestD) { bestD = d; target = s; }
   }
+  // Assimilation takes generations, longer for a cohesive conquered
+  // people; the empire cannot heal while it digests.
+  const alreadyDigesting = tribeSettlements(world, winner.id).some((s) =>
+    s.assimilatingUntil && world.year < s.assimilatingUntil);
+
   target.tribeId = winner.id;
-  target.assimilatingUntil = world.year + Math.round(20 + 40 * loser.traits.cohesion);
+  target.assimilatingUntil = world.year + Math.round(30 + 60 * loser.traits.cohesion);
   log(`${winner.name} conquered ${target.name}; its people now answer to new masters.`);
   rel.grievances = Math.min(5, rel.grievances + 2);
+
+  // Victory has a price: the conqueror absorbs a foreign populace. Unity
+  // falls in proportion to how much of the empire the newcomers now make
+  // up — and conquering while still digesting earlier conquests
+  // compounds the strain.
+  const ownPop = Math.max(1, totalTribePop(world, winner) - target.pop);
+  const drop = Math.min(0.35, 0.05 + 0.6 * (target.pop / ownPop)) +
+    (alreadyDigesting ? 0.08 : 0);
+  winner.unity = Math.max(0, (winner.unity ?? 1) - drop);
+  nudgeTrait(winner, 'cohesion', -0.01);
+  if (drop > 0.1) {
+    log(`The conquered masses strain ${winner.name}'s unity.`);
+  }
+
   checkTribeDeath(world, loser, log);
 }
 

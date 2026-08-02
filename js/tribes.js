@@ -208,6 +208,56 @@ function settleTribe(world, tribe, rng, { proto = false } = {}) {
   return settlement;
 }
 
+// A splinter people born of civil war: they carry the parent's knowledge
+// and most of its character, but their identity is forged anew in revolt —
+// cohesion runs higher, and the founding traits reset to who they now are.
+function createSplinterTribe(world, parent, rng) {
+  const id = world.tribes.length;
+  const takenNames = new Set(world.tribes.map((t) => t.name));
+  const traits = {};
+  for (const key of TRAIT_KEYS) {
+    traits[key] = clamp01(parent.traits[key] + rng.range(-0.08, 0.08));
+  }
+  traits.cohesion = clamp01(traits.cohesion + 0.15);
+
+  const tribe = {
+    id,
+    name: generateTribeName(rng, takenNames),
+    color: TRIBE_COLORS[id % TRIBE_COLORS.length],
+    alive: true,
+    archetype: parent.archetype,
+    parentId: parent.id,
+    traits,
+    foundingTraits: { ...traits },
+    nudges: {},
+    progress: {
+      techs: new Set(parent.progress.techs), // knowledge does not un-learn
+      pools: {
+        tech: parent.progress.pools.tech * 0.3,
+        art: parent.progress.pools.art * 0.3,
+        philosophy: parent.progress.pools.philosophy * 0.3,
+      },
+      governance: 'chiefdom',
+      artStage: parent.progress.artStage,
+      philStage: parent.progress.philStage,
+      target: null,
+    },
+    resourceAccess: new Set(),
+    tradePartners: 0,
+    sedentaryYear: parent.sedentaryYear,
+    peakPop: 0,
+    unity: 0.85,
+    rangeCenter: { ...parent.rangeCenter },
+  };
+  // The parent keeps 70% of its accumulated pools.
+  parent.progress.pools.tech *= 0.7;
+  parent.progress.pools.art *= 0.7;
+  parent.progress.pools.philosophy *= 0.7;
+
+  world.tribes.push(tribe);
+  return tribe;
+}
+
 function foundTribes(world, count = 7) {
   const rng = new RNG(world.seed + ':tribes');
   const { size } = world;
@@ -275,6 +325,11 @@ function foundTribes(world, count = 7) {
       tradePartners: 0,
       sedentaryYear: null,
       peakPop: 0,
+      // Unity is STATE, not a trait: the current condition of the polity.
+      // Conquest dilutes it with unabsorbed peoples; time, cohesion and
+      // discipline rebuild it. Low unity saps the economy and can end in
+      // civil war.
+      unity: 1,
       rangeCenter: { x: site.x, y: site.y },
     };
   });
