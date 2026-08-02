@@ -905,10 +905,18 @@ function tileAt(world, x, y) {
 }
 
 // ---- js/tribes.js ----
-// Tribe founding: scores the landscape for settlement suitability and
-// places a handful of primitive tribes at the best well-separated sites —
-// river valleys, fertile lowland and rich coasts, just where real early
-// peoples settled.
+// Tribes and settlements.
+//
+// These are deliberately separate concepts:
+//   - A TRIBE is a social entity — a people with a shared identity. It will
+//     evolve into the notion of a nation.
+//   - A SETTLEMENT is a place — a camp at a location with inhabitants. It
+//     will evolve into the notion of a city.
+// A settlement declares allegiance to a tribe via `tribeId`; a tribe never
+// "contains" places. Allegiance can later change hands (conquest,
+// secession, assimilation) without either entity losing its identity.
+//
+// Settlements live in world.settlements; tribes in world.tribes.
 
 const TRIBE_COLORS = [
   '#e05555', '#4f8fe0', '#57c470', '#e0b03c',
@@ -919,6 +927,13 @@ const NAME_STEMS = ['Ash', 'Bran', 'Cor', 'Dun', 'Elm', 'Fen', 'Gal', 'Hazel',
   'Ith', 'Kel', 'Lor', 'Mor', 'Nav', 'Ost', 'Pel', 'Rin', 'Sul', 'Tor'];
 const NAME_SUFFIXES = ['folk', 'kin', 'clan', 'tribe', 'people'];
 
+// Place-name parts for settlements — Anglo-ish toponyms so places sound
+// like places, not peoples.
+const PLACE_STEMS = ['Ash', 'Bran', 'Cor', 'Dun', 'Elm', 'Fen', 'Gal', 'Hazel',
+  'Kel', 'Lor', 'Mor', 'Nav', 'Ost', 'Pel', 'Rin', 'Sul', 'Tor', 'Wyn'];
+const PLACE_SUFFIXES = ['ford', 'mouth', 'wick', 'ton', 'mere', 'den',
+  'holt', 'combe', 'stead', 'bury'];
+
 function generateTribeName(rng, taken) {
   for (let tries = 0; tries < 50; tries++) {
     const name = `The ${rng.pick(NAME_STEMS)}${rng.pick(NAME_SUFFIXES)}`;
@@ -928,6 +943,68 @@ function generateTribeName(rng, taken) {
     }
   }
   return `The ${rng.pick(NAME_STEMS)}${rng.pick(NAME_SUFFIXES)}`;
+}
+
+function generateSettlementName(world, rng) {
+  for (let tries = 0; tries < 80; tries++) {
+    const name = `${rng.pick(PLACE_STEMS)}${rng.pick(PLACE_SUFFIXES)}`;
+    if (!world.settlementNames.has(name)) {
+      world.settlementNames.add(name);
+      return name;
+    }
+  }
+  // Fallback: qualify a reused name rather than fail.
+  return `New ${rng.pick(PLACE_STEMS)}${rng.pick(PLACE_SUFFIXES)}`;
+}
+
+function createSettlement(world, rng, x, y, pop, tribeId) {
+  const settlement = {
+    id: world.nextSettlementId++,
+    name: generateSettlementName(world, rng),
+    x,
+    y,
+    pop,
+    tribeId,           // allegiance, not ownership — may change hands later
+    foundedYear: world.year || 0,
+  };
+  world.settlements.push(settlement);
+  return settlement;
+}
+
+// --- Tribe/settlement relationship helpers ---
+
+function tribeSettlements(world, tribeId) {
+  return world.settlements.filter((s) => s.tribeId === tribeId);
+}
+
+function tribePopulation(world, tribe) {
+  let sum = 0;
+  for (const s of world.settlements) {
+    if (s.tribeId === tribe.id) sum += s.pop;
+  }
+  return sum;
+}
+
+// A tribe's chief settlement (the future "capital"): its oldest surviving
+// settlement, ties broken by size.
+function tribeChiefSettlement(world, tribe) {
+  let chief = null;
+  for (const s of world.settlements) {
+    if (s.tribeId !== tribe.id) continue;
+    if (!chief || s.foundedYear < chief.foundedYear ||
+      (s.foundedYear === chief.foundedYear && s.pop > chief.pop)) {
+      chief = s;
+    }
+  }
+  return chief;
+}
+
+function settlementAt(world, x, y, radius = 1) {
+  if (!world.settlements) return null;
+  for (const s of world.settlements) {
+    if (Math.abs(s.x - x) <= radius && Math.abs(s.y - y) <= radius) return s;
+  }
+  return null;
 }
 
 // How attractive a tile is as a place to live. Used both for the initial
@@ -1001,31 +1078,32 @@ function foundTribes(world, count = 7) {
     if (ok) sites.push(cand);
   }
 
-  const takenNames = new Set();
-  world.tribes = sites.map((site, idx) => {
-    const pop = rng.int(90, 160);
-    return {
-      id: idx,
-      name: generateTribeName(rng, takenNames),
-      color: TRIBE_COLORS[idx % TRIBE_COLORS.length],
-      settlements: [{ x: site.x, y: site.y, pop }],
-      alive: true,
-    };
-  });
-
   world.year = 0;
+  world.settlements = [];
+  world.nextSettlementId = 0;
+  world.settlementNames = new Set();
+  world.tensions = new Set();
+
+  const takenNames = new Set();
+  world.tribes = sites.map((site, idx) => ({
+    id: idx,
+    name: generateTribeName(rng, takenNames),
+    color: TRIBE_COLORS[idx % TRIBE_COLORS.length],
+    alive: true,
+  }));
+
+  for (const tribe of world.tribes) {
+    const site = sites[tribe.id];
+    createSettlement(world, rng, site.x, site.y, rng.int(90, 160), tribe.id);
+  }
+
   world.events = [{
     year: 0,
     text: `${world.tribes.length} tribes arrived on the island and made their first camps.`,
   }];
-  world.tensions = new Set();
 
   computeInfluence(world);
   return world.tribes;
-}
-
-function tribePopulation(tribe) {
-  return tribe.settlements.reduce((sum, s) => sum + s.pop, 0);
 }
 
 // ---- js/sim.js ----
@@ -1118,37 +1196,42 @@ function simulateYear(world) {
 
   const GROWTH_RATE = 0.06;
 
+  // Places live their year: each settlement feeds itself from the land
+  // around it, whatever tribe it answers to.
+  for (const s of world.settlements) {
+    const cap = Math.max(10, settlementCapacity(world, s) * seasonFactor);
+    // Logistic growth toward capacity; shrinks when over capacity.
+    const growth = GROWTH_RATE * s.pop * (1 - s.pop / cap);
+    s.pop = Math.max(0, s.pop + growth + rng.range(-2, 2));
+  }
+
+  // Founding daughter settlements: a crowded settlement sends part of its
+  // people to the best nearby unclaimed ground. The new place keeps the
+  // parent's allegiance. At most one founding per tribe per year.
+  const SPLIT_POP = 220;
+  const foundedThisYear = new Set();
+  for (const s of [...world.settlements]) {
+    if (s.pop < SPLIT_POP || foundedThisYear.has(s.tribeId)) continue;
+    const site = findDaughterSite(world, s, rng);
+    if (!site) continue;
+    const migrants = Math.round(s.pop * 0.4);
+    s.pop -= migrants;
+    const daughter = createSettlement(world, rng, site.x, site.y, migrants, s.tribeId);
+    foundedThisYear.add(s.tribeId);
+    const tribe = world.tribes[s.tribeId];
+    log(`${tribe.name} founded ${daughter.name} as ${s.name} grew crowded.`);
+  }
+
+  // Abandon failed settlements.
+  world.settlements = world.settlements.filter((s) => {
+    if (s.pop >= 12) return true;
+    log(`${s.name} was abandoned as its people dwindled.`);
+    return false;
+  });
+
+  // A tribe with no settlements left has died out as a people.
   for (const tribe of world.tribes) {
-    if (!tribe.alive) continue;
-
-    for (const s of tribe.settlements) {
-      const cap = Math.max(10, settlementCapacity(world, s) * seasonFactor);
-      // Logistic growth toward capacity; shrinks when over capacity.
-      const growth = GROWTH_RATE * s.pop * (1 - s.pop / cap);
-      s.pop = Math.max(0, s.pop + growth + rng.range(-2, 2));
-    }
-
-    // Founding daughter camps: a crowded settlement sends part of its
-    // people to the best nearby unclaimed ground.
-    const SPLIT_POP = 220;
-    for (const s of [...tribe.settlements]) {
-      if (s.pop < SPLIT_POP) continue;
-      const site = findDaughterSite(world, s, rng);
-      if (!site) continue;
-      const migrants = Math.round(s.pop * 0.4);
-      s.pop -= migrants;
-      tribe.settlements.push({ x: site.x, y: site.y, pop: migrants });
-      log(`${tribe.name} founded a new camp as their numbers grew.`);
-      break; // at most one new camp per tribe per year
-    }
-
-    // Abandon failed camps.
-    tribe.settlements = tribe.settlements.filter((s) => {
-      if (s.pop >= 12) return true;
-      log(`A dwindling camp of ${tribe.name} was abandoned.`);
-      return false;
-    });
-    if (tribe.settlements.length === 0) {
+    if (tribe.alive && tribeSettlements(world, tribe.id).length === 0) {
       tribe.alive = false;
       log(`${tribe.name} died out.`);
     }
@@ -1174,13 +1257,10 @@ function findDaughterSite(world, parent, rng) {
     if (x < 4 || y < 4 || x >= size - 4 || y >= size - 4) continue;
 
     let tooClose = false;
-    for (const tribe of world.tribes) {
-      for (const s of tribe.settlements) {
-        const dx = s.x - x;
-        const dy = s.y - y;
-        if (dx * dx + dy * dy < MIN_DIST * MIN_DIST) { tooClose = true; break; }
-      }
-      if (tooClose) break;
+    for (const s of world.settlements) {
+      const dx = s.x - x;
+      const dy = s.y - y;
+      if (dx * dx + dy * dy < MIN_DIST * MIN_DIST) { tooClose = true; break; }
     }
     if (tooClose) continue;
 
@@ -1209,13 +1289,15 @@ function computeInfluence(world) {
 
   // Accumulate per-tribe strength only where settlements reach: iterate
   // each settlement's footprint instead of every tile x every settlement.
+  // Influence flows from PLACES (settlements) but accrues to the SOCIAL
+  // entity (the tribe they give allegiance to).
   const tribeStrength = new Float32Array(size * size); // reused per tribe
 
   for (const tribe of world.tribes) {
     if (!tribe.alive) continue;
     tribeStrength.fill(0);
 
-    for (const s of tribe.settlements) {
+    for (const s of tribeSettlements(world, tribe.id)) {
       const reach = gatherRadius(s.pop) * 2.2;
       const ri = Math.ceil(reach);
       for (let dy = -ri; dy <= ri; dy++) {
@@ -1503,34 +1585,42 @@ function renderWorld(world, canvas, view = 'satellite') {
     }
   }
 
-  // Settlements: drawn on the satellite and communities views. Marker size
-  // scales with population; the communities view also labels each tribe at
-  // its first (founding) settlement.
-  if ((view === 'satellite' || view === 'communities') && world.tribes) {
-    for (const tribe of world.tribes) {
-      if (!tribe.alive) continue;
-      tribe.settlements.forEach((s, idx) => {
-        const px = s.x * TILE_PX + TILE_PX / 2;
-        const py = s.y * TILE_PX + TILE_PX / 2;
-        const radius = 2.5 + Math.sqrt(s.pop) / 5;
-        ctx.fillStyle = tribe.color;
-        ctx.strokeStyle = 'rgba(0,0,0,0.85)';
-        ctx.lineWidth = 1.4;
-        ctx.beginPath();
-        ctx.arc(px, py, radius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
+  // Settlements (places) are drawn on the satellite and communities views,
+  // coloured by the tribe they give allegiance to. Marker size scales with
+  // population; the communities view labels each tribe at its chief
+  // settlement.
+  if ((view === 'satellite' || view === 'communities') && world.settlements) {
+    for (const s of world.settlements) {
+      const tribe = world.tribes[s.tribeId];
+      if (!tribe || !tribe.alive) continue;
+      const px = s.x * TILE_PX + TILE_PX / 2;
+      const py = s.y * TILE_PX + TILE_PX / 2;
+      const radius = 2.5 + Math.sqrt(s.pop) / 5;
+      ctx.fillStyle = tribe.color;
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.arc(px, py, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
 
-        if (view === 'communities' && idx === 0) {
-          ctx.font = 'bold 12px system-ui, sans-serif';
-          ctx.textAlign = 'center';
-          ctx.lineWidth = 3;
-          ctx.strokeStyle = 'rgba(0,0,0,0.8)';
-          ctx.strokeText(tribe.name, px, py - radius - 5);
-          ctx.fillStyle = '#fff';
-          ctx.fillText(tribe.name, px, py - radius - 5);
-        }
-      });
+    if (view === 'communities') {
+      ctx.font = 'bold 12px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      for (const tribe of world.tribes) {
+        if (!tribe.alive) continue;
+        const chief = tribeChiefSettlement(world, tribe);
+        if (!chief) continue;
+        const px = chief.x * TILE_PX + TILE_PX / 2;
+        const py = chief.y * TILE_PX + TILE_PX / 2;
+        const radius = 2.5 + Math.sqrt(chief.pop) / 5;
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+        ctx.strokeText(tribe.name, px, py - radius - 5);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(tribe.name, px, py - radius - 5);
+      }
     }
   }
 }
@@ -1586,12 +1676,13 @@ function renderWorld(world, canvas, view = 'satellite') {
     const kmPerTile = world.kmPerTile;
     tribesPanel.innerHTML = world.tribes
       .slice()
-      .sort((a, b) => tribePopulation(b) - tribePopulation(a))
+      .sort((a, b) => tribePopulation(world, b) - tribePopulation(world, a))
       .map((t) => {
-        const pop = Math.round(tribePopulation(t));
+        const pop = Math.round(tribePopulation(world, t));
+        const camps = tribeSettlements(world, t.id).length;
         const territory = ((t.territoryTiles || 0) * kmPerTile * kmPerTile).toLocaleString();
         const meta = t.alive
-          ? `${pop.toLocaleString()} people · ${t.settlements.length} camp${t.settlements.length > 1 ? 's' : ''}<br>${territory} km²`
+          ? `${pop.toLocaleString()} people · ${camps} camp${camps > 1 ? 's' : ''}<br>${territory} km²`
           : 'died out';
         return `<div class="tribe-row${t.alive ? '' : ' dead'}">` +
           `<span class="swatch" style="background: ${t.color}"></span>` +
@@ -1689,8 +1780,9 @@ function renderWorld(world, canvas, view = 'satellite') {
     if (world.tribes) {
       rows.push(['Year', world.year]);
       const alive = world.tribes.filter((t) => t.alive);
-      const totalPop = Math.round(alive.reduce((sum, t) => sum + tribePopulation(t), 0));
+      const totalPop = Math.round(world.settlements.reduce((sum, s) => sum + s.pop, 0));
       rows.push(['Tribes', `${alive.length} of ${world.tribes.length}`]);
+      rows.push(['Settlements', world.settlements.length]);
       rows.push(['Population', totalPop.toLocaleString()]);
     }
     rows.push(['Land area', `${s.landAreaKm2.toLocaleString()} km²`]);
@@ -1715,6 +1807,13 @@ function renderWorld(world, canvas, view = 'satellite') {
     parts.push(`Rainfall ≈ ${moistureToRainfallMm(tile.moisture).toLocaleString()} mm/yr`);
     parts.push(`Avg temp ≈ ${tile.temperature.toFixed(1)}°C`);
     if (tile.resource) parts.push(`Resource: <strong>${tile.resource.name}</strong>`);
+    const settlement = world.tribes ? settlementAt(world, tile.x, tile.y) : null;
+    if (settlement) {
+      const tribe = world.tribes[settlement.tribeId];
+      parts.push(`<strong>${settlement.name}</strong> — ${Math.round(settlement.pop)} people` +
+        (tribe ? ` of ${tribe.name}` : '') +
+        ` (founded Yr ${settlement.foundedYear})`);
+    }
     if (world.influenceOwner) {
       const ownerId = world.influenceOwner[tile.y * world.size + tile.x];
       if (ownerId >= 0 && world.tribes[ownerId]) {

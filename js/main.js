@@ -48,12 +48,13 @@
     const kmPerTile = world.kmPerTile;
     tribesPanel.innerHTML = world.tribes
       .slice()
-      .sort((a, b) => tribePopulation(b) - tribePopulation(a))
+      .sort((a, b) => tribePopulation(world, b) - tribePopulation(world, a))
       .map((t) => {
-        const pop = Math.round(tribePopulation(t));
+        const pop = Math.round(tribePopulation(world, t));
+        const camps = tribeSettlements(world, t.id).length;
         const territory = ((t.territoryTiles || 0) * kmPerTile * kmPerTile).toLocaleString();
         const meta = t.alive
-          ? `${pop.toLocaleString()} people · ${t.settlements.length} camp${t.settlements.length > 1 ? 's' : ''}<br>${territory} km²`
+          ? `${pop.toLocaleString()} people · ${camps} camp${camps > 1 ? 's' : ''}<br>${territory} km²`
           : 'died out';
         return `<div class="tribe-row${t.alive ? '' : ' dead'}">` +
           `<span class="swatch" style="background: ${t.color}"></span>` +
@@ -151,8 +152,9 @@
     if (world.tribes) {
       rows.push(['Year', world.year]);
       const alive = world.tribes.filter((t) => t.alive);
-      const totalPop = Math.round(alive.reduce((sum, t) => sum + tribePopulation(t), 0));
+      const totalPop = Math.round(world.settlements.reduce((sum, s) => sum + s.pop, 0));
       rows.push(['Tribes', `${alive.length} of ${world.tribes.length}`]);
+      rows.push(['Settlements', world.settlements.length]);
       rows.push(['Population', totalPop.toLocaleString()]);
     }
     rows.push(['Land area', `${s.landAreaKm2.toLocaleString()} km²`]);
@@ -177,6 +179,13 @@
     parts.push(`Rainfall ≈ ${moistureToRainfallMm(tile.moisture).toLocaleString()} mm/yr`);
     parts.push(`Avg temp ≈ ${tile.temperature.toFixed(1)}°C`);
     if (tile.resource) parts.push(`Resource: <strong>${tile.resource.name}</strong>`);
+    const settlement = world.tribes ? settlementAt(world, tile.x, tile.y) : null;
+    if (settlement) {
+      const tribe = world.tribes[settlement.tribeId];
+      parts.push(`<strong>${settlement.name}</strong> — ${Math.round(settlement.pop)} people` +
+        (tribe ? ` of ${tribe.name}` : '') +
+        ` (founded Yr ${settlement.foundedYear})`);
+    }
     if (world.influenceOwner) {
       const ownerId = world.influenceOwner[tile.y * world.size + tile.x];
       if (ownerId >= 0 && world.tribes[ownerId]) {

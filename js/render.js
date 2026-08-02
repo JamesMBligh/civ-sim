@@ -204,34 +204,42 @@ function renderWorld(world, canvas, view = 'satellite') {
     }
   }
 
-  // Settlements: drawn on the satellite and communities views. Marker size
-  // scales with population; the communities view also labels each tribe at
-  // its first (founding) settlement.
-  if ((view === 'satellite' || view === 'communities') && world.tribes) {
-    for (const tribe of world.tribes) {
-      if (!tribe.alive) continue;
-      tribe.settlements.forEach((s, idx) => {
-        const px = s.x * TILE_PX + TILE_PX / 2;
-        const py = s.y * TILE_PX + TILE_PX / 2;
-        const radius = 2.5 + Math.sqrt(s.pop) / 5;
-        ctx.fillStyle = tribe.color;
-        ctx.strokeStyle = 'rgba(0,0,0,0.85)';
-        ctx.lineWidth = 1.4;
-        ctx.beginPath();
-        ctx.arc(px, py, radius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
+  // Settlements (places) are drawn on the satellite and communities views,
+  // coloured by the tribe they give allegiance to. Marker size scales with
+  // population; the communities view labels each tribe at its chief
+  // settlement.
+  if ((view === 'satellite' || view === 'communities') && world.settlements) {
+    for (const s of world.settlements) {
+      const tribe = world.tribes[s.tribeId];
+      if (!tribe || !tribe.alive) continue;
+      const px = s.x * TILE_PX + TILE_PX / 2;
+      const py = s.y * TILE_PX + TILE_PX / 2;
+      const radius = 2.5 + Math.sqrt(s.pop) / 5;
+      ctx.fillStyle = tribe.color;
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.arc(px, py, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
 
-        if (view === 'communities' && idx === 0) {
-          ctx.font = 'bold 12px system-ui, sans-serif';
-          ctx.textAlign = 'center';
-          ctx.lineWidth = 3;
-          ctx.strokeStyle = 'rgba(0,0,0,0.8)';
-          ctx.strokeText(tribe.name, px, py - radius - 5);
-          ctx.fillStyle = '#fff';
-          ctx.fillText(tribe.name, px, py - radius - 5);
-        }
-      });
+    if (view === 'communities') {
+      ctx.font = 'bold 12px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      for (const tribe of world.tribes) {
+        if (!tribe.alive) continue;
+        const chief = tribeChiefSettlement(world, tribe);
+        if (!chief) continue;
+        const px = chief.x * TILE_PX + TILE_PX / 2;
+        const py = chief.y * TILE_PX + TILE_PX / 2;
+        const radius = 2.5 + Math.sqrt(chief.pop) / 5;
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+        ctx.strokeText(tribe.name, px, py - radius - 5);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(tribe.name, px, py - radius - 5);
+      }
     }
   }
 }

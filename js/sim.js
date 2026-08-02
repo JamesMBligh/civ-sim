@@ -87,37 +87,42 @@ function simulateYear(world) {
 
   const GROWTH_RATE = 0.06;
 
+  // Places live their year: each settlement feeds itself from the land
+  // around it, whatever tribe it answers to.
+  for (const s of world.settlements) {
+    const cap = Math.max(10, settlementCapacity(world, s) * seasonFactor);
+    // Logistic growth toward capacity; shrinks when over capacity.
+    const growth = GROWTH_RATE * s.pop * (1 - s.pop / cap);
+    s.pop = Math.max(0, s.pop + growth + rng.range(-2, 2));
+  }
+
+  // Founding daughter settlements: a crowded settlement sends part of its
+  // people to the best nearby unclaimed ground. The new place keeps the
+  // parent's allegiance. At most one founding per tribe per year.
+  const SPLIT_POP = 220;
+  const foundedThisYear = new Set();
+  for (const s of [...world.settlements]) {
+    if (s.pop < SPLIT_POP || foundedThisYear.has(s.tribeId)) continue;
+    const site = findDaughterSite(world, s, rng);
+    if (!site) continue;
+    const migrants = Math.round(s.pop * 0.4);
+    s.pop -= migrants;
+    const daughter = createSettlement(world, rng, site.x, site.y, migrants, s.tribeId);
+    foundedThisYear.add(s.tribeId);
+    const tribe = world.tribes[s.tribeId];
+    log(`${tribe.name} founded ${daughter.name} as ${s.name} grew crowded.`);
+  }
+
+  // Abandon failed settlements.
+  world.settlements = world.settlements.filter((s) => {
+    if (s.pop >= 12) return true;
+    log(`${s.name} was abandoned as its people dwindled.`);
+    return false;
+  });
+
+  // A tribe with no settlements left has died out as a people.
   for (const tribe of world.tribes) {
-    if (!tribe.alive) continue;
-
-    for (const s of tribe.settlements) {
-      const cap = Math.max(10, settlementCapacity(world, s) * seasonFactor);
-      // Logistic growth toward capacity; shrinks when over capacity.
-      const growth = GROWTH_RATE * s.pop * (1 - s.pop / cap);
-      s.pop = Math.max(0, s.pop + growth + rng.range(-2, 2));
-    }
-
-    // Founding daughter camps: a crowded settlement sends part of its
-    // people to the best nearby unclaimed ground.
-    const SPLIT_POP = 220;
-    for (const s of [...tribe.settlements]) {
-      if (s.pop < SPLIT_POP) continue;
-      const site = findDaughterSite(world, s, rng);
-      if (!site) continue;
-      const migrants = Math.round(s.pop * 0.4);
-      s.pop -= migrants;
-      tribe.settlements.push({ x: site.x, y: site.y, pop: migrants });
-      log(`${tribe.name} founded a new camp as their numbers grew.`);
-      break; // at most one new camp per tribe per year
-    }
-
-    // Abandon failed camps.
-    tribe.settlements = tribe.settlements.filter((s) => {
-      if (s.pop >= 12) return true;
-      log(`A dwindling camp of ${tribe.name} was abandoned.`);
-      return false;
-    });
-    if (tribe.settlements.length === 0) {
+    if (tribe.alive && tribeSettlements(world, tribe.id).length === 0) {
       tribe.alive = false;
       log(`${tribe.name} died out.`);
     }
@@ -143,13 +148,10 @@ function findDaughterSite(world, parent, rng) {
     if (x < 4 || y < 4 || x >= size - 4 || y >= size - 4) continue;
 
     let tooClose = false;
-    for (const tribe of world.tribes) {
-      for (const s of tribe.settlements) {
-        const dx = s.x - x;
-        const dy = s.y - y;
-        if (dx * dx + dy * dy < MIN_DIST * MIN_DIST) { tooClose = true; break; }
-      }
-      if (tooClose) break;
+    for (const s of world.settlements) {
+      const dx = s.x - x;
+      const dy = s.y - y;
+      if (dx * dx + dy * dy < MIN_DIST * MIN_DIST) { tooClose = true; break; }
     }
     if (tooClose) continue;
 
@@ -178,13 +180,15 @@ function computeInfluence(world) {
 
   // Accumulate per-tribe strength only where settlements reach: iterate
   // each settlement's footprint instead of every tile x every settlement.
+  // Influence flows from PLACES (settlements) but accrues to the SOCIAL
+  // entity (the tribe they give allegiance to).
   const tribeStrength = new Float32Array(size * size); // reused per tribe
 
   for (const tribe of world.tribes) {
     if (!tribe.alive) continue;
     tribeStrength.fill(0);
 
-    for (const s of tribe.settlements) {
+    for (const s of tribeSettlements(world, tribe.id)) {
       const reach = gatherRadius(s.pop) * 2.2;
       const ri = Math.ceil(reach);
       for (let dy = -ri; dy <= ri; dy++) {

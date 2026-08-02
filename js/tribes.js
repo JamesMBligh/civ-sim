@@ -1,7 +1,15 @@
-// Tribe founding: scores the landscape for settlement suitability and
-// places a handful of primitive tribes at the best well-separated sites —
-// river valleys, fertile lowland and rich coasts, just where real early
-// peoples settled.
+// Tribes and settlements.
+//
+// These are deliberately separate concepts:
+//   - A TRIBE is a social entity — a people with a shared identity. It will
+//     evolve into the notion of a nation.
+//   - A SETTLEMENT is a place — a camp at a location with inhabitants. It
+//     will evolve into the notion of a city.
+// A settlement declares allegiance to a tribe via `tribeId`; a tribe never
+// "contains" places. Allegiance can later change hands (conquest,
+// secession, assimilation) without either entity losing its identity.
+//
+// Settlements live in world.settlements; tribes in world.tribes.
 
 const TRIBE_COLORS = [
   '#e05555', '#4f8fe0', '#57c470', '#e0b03c',
@@ -12,6 +20,13 @@ const NAME_STEMS = ['Ash', 'Bran', 'Cor', 'Dun', 'Elm', 'Fen', 'Gal', 'Hazel',
   'Ith', 'Kel', 'Lor', 'Mor', 'Nav', 'Ost', 'Pel', 'Rin', 'Sul', 'Tor'];
 const NAME_SUFFIXES = ['folk', 'kin', 'clan', 'tribe', 'people'];
 
+// Place-name parts for settlements — Anglo-ish toponyms so places sound
+// like places, not peoples.
+const PLACE_STEMS = ['Ash', 'Bran', 'Cor', 'Dun', 'Elm', 'Fen', 'Gal', 'Hazel',
+  'Kel', 'Lor', 'Mor', 'Nav', 'Ost', 'Pel', 'Rin', 'Sul', 'Tor', 'Wyn'];
+const PLACE_SUFFIXES = ['ford', 'mouth', 'wick', 'ton', 'mere', 'den',
+  'holt', 'combe', 'stead', 'bury'];
+
 function generateTribeName(rng, taken) {
   for (let tries = 0; tries < 50; tries++) {
     const name = `The ${rng.pick(NAME_STEMS)}${rng.pick(NAME_SUFFIXES)}`;
@@ -21,6 +36,68 @@ function generateTribeName(rng, taken) {
     }
   }
   return `The ${rng.pick(NAME_STEMS)}${rng.pick(NAME_SUFFIXES)}`;
+}
+
+function generateSettlementName(world, rng) {
+  for (let tries = 0; tries < 80; tries++) {
+    const name = `${rng.pick(PLACE_STEMS)}${rng.pick(PLACE_SUFFIXES)}`;
+    if (!world.settlementNames.has(name)) {
+      world.settlementNames.add(name);
+      return name;
+    }
+  }
+  // Fallback: qualify a reused name rather than fail.
+  return `New ${rng.pick(PLACE_STEMS)}${rng.pick(PLACE_SUFFIXES)}`;
+}
+
+function createSettlement(world, rng, x, y, pop, tribeId) {
+  const settlement = {
+    id: world.nextSettlementId++,
+    name: generateSettlementName(world, rng),
+    x,
+    y,
+    pop,
+    tribeId,           // allegiance, not ownership — may change hands later
+    foundedYear: world.year || 0,
+  };
+  world.settlements.push(settlement);
+  return settlement;
+}
+
+// --- Tribe/settlement relationship helpers ---
+
+function tribeSettlements(world, tribeId) {
+  return world.settlements.filter((s) => s.tribeId === tribeId);
+}
+
+function tribePopulation(world, tribe) {
+  let sum = 0;
+  for (const s of world.settlements) {
+    if (s.tribeId === tribe.id) sum += s.pop;
+  }
+  return sum;
+}
+
+// A tribe's chief settlement (the future "capital"): its oldest surviving
+// settlement, ties broken by size.
+function tribeChiefSettlement(world, tribe) {
+  let chief = null;
+  for (const s of world.settlements) {
+    if (s.tribeId !== tribe.id) continue;
+    if (!chief || s.foundedYear < chief.foundedYear ||
+      (s.foundedYear === chief.foundedYear && s.pop > chief.pop)) {
+      chief = s;
+    }
+  }
+  return chief;
+}
+
+function settlementAt(world, x, y, radius = 1) {
+  if (!world.settlements) return null;
+  for (const s of world.settlements) {
+    if (Math.abs(s.x - x) <= radius && Math.abs(s.y - y) <= radius) return s;
+  }
+  return null;
 }
 
 // How attractive a tile is as a place to live. Used both for the initial
@@ -94,29 +171,30 @@ function foundTribes(world, count = 7) {
     if (ok) sites.push(cand);
   }
 
-  const takenNames = new Set();
-  world.tribes = sites.map((site, idx) => {
-    const pop = rng.int(90, 160);
-    return {
-      id: idx,
-      name: generateTribeName(rng, takenNames),
-      color: TRIBE_COLORS[idx % TRIBE_COLORS.length],
-      settlements: [{ x: site.x, y: site.y, pop }],
-      alive: true,
-    };
-  });
-
   world.year = 0;
+  world.settlements = [];
+  world.nextSettlementId = 0;
+  world.settlementNames = new Set();
+  world.tensions = new Set();
+
+  const takenNames = new Set();
+  world.tribes = sites.map((site, idx) => ({
+    id: idx,
+    name: generateTribeName(rng, takenNames),
+    color: TRIBE_COLORS[idx % TRIBE_COLORS.length],
+    alive: true,
+  }));
+
+  for (const tribe of world.tribes) {
+    const site = sites[tribe.id];
+    createSettlement(world, rng, site.x, site.y, rng.int(90, 160), tribe.id);
+  }
+
   world.events = [{
     year: 0,
     text: `${world.tribes.length} tribes arrived on the island and made their first camps.`,
   }];
-  world.tensions = new Set();
 
   computeInfluence(world);
   return world.tribes;
-}
-
-function tribePopulation(tribe) {
-  return tribe.settlements.reduce((sum, s) => sum + s.pop, 0);
 }

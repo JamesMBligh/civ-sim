@@ -68,6 +68,22 @@ The sidebar shows each tribe's population, camps and territory, plus a
 chronicle of notable events. Simulation is deterministic per seed, like
 the landscape itself.
 
+### Tribes vs settlements
+
+Two deliberately separate concepts, mirroring the later distinction
+between nation and city:
+
+- A **tribe** is a *social* entity — a people with a shared identity.
+  It has a name, a colour, and members, but no location of its own.
+- A **settlement** is a *place* — a named camp at a location with
+  inhabitants and a founding year (`world.settlements`).
+
+A settlement declares **allegiance** to a tribe (`settlement.tribeId`);
+a tribe never "contains" places. This keeps the door open for
+settlements changing hands — conquest, secession, assimilation —
+without either entity losing its identity, and scales cleanly from
+camp/tribe to city/nation.
+
 ## Built version & GitHub Pages
 
 `node build.js` bundles the app into a single self-contained
@@ -108,7 +124,7 @@ folder.
 | `js/resources.js` | Terrain-aware resource placement |
 | `js/world.js` | World state container and generation pipeline |
 | `js/render.js` | Canvas rendering (terrain / elevation / moisture) |
-| `js/tribes.js` | Tribe founding: site scoring, names, colors |
+| `js/tribes.js` | Tribes (social) & settlements (place): founding, naming, allegiance |
 | `js/sim.js` | Yearly simulation: food, growth, expansion, influence |
 | `js/main.js` | UI wiring |
 | `build.js` | Bundles everything into `docs/index.html` for GitHub Pages |
