@@ -85,6 +85,15 @@ function spread(access, world, cx, cy, value, radius) {
 
 const IMPASSABLE = Infinity;
 
+// Infrastructure travel costs. The gap between an established road and
+// raw terrain is what makes traffic consolidate onto existing corridors
+// instead of wearing new parallel paths — the wider the gap, the fewer
+// roads the island ends up needing.
+const COST_ROAD = 0.28;        // established road: strongly preferred (3.5:1 vs plains)
+const TRACK_FACTOR = 0.7;      // a worn track modestly eases the underlying terrain
+const COST_FERRY_BOATS = 0.35; // a worked crossing, for peoples with boats
+const COST_FERRY_WALK = 1.5;   // an operated ferry carries anyone, at a price
+
 // Cost grids are rebuilt at each trade-network update (they change as
 // roads are laid) and stored as world.costWalk / world.costBoats.
 function buildCostGrid(world, hasBoats) {
@@ -123,10 +132,10 @@ function buildCostGrid(world, hasBoats) {
     // Physical infrastructure is usable by anyone who walks it. A road
     // on a river tile is a bridge; a ferry is an operated crossing —
     // cheap for boat peoples, and it opens the water to everyone else.
-    if (roads && roads[i] === ROAD_ROAD) c = Math.min(c, 0.5);
-    else if (roads && roads[i] === ROAD_TRACK) c = Math.min(c, c * 0.75);
+    if (roads && roads[i] === ROAD_ROAD) c = Math.min(c, COST_ROAD);
+    else if (roads && roads[i] === ROAD_TRACK) c = Math.min(c, c * TRACK_FACTOR);
     else if (roads && roads[i] === ROAD_FERRY) {
-      c = Math.min(c, hasBoats ? 0.35 : 1.5);
+      c = Math.min(c, hasBoats ? COST_FERRY_BOATS : COST_FERRY_WALK);
     }
 
     cost[i] = c;
