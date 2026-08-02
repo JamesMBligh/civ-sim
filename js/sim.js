@@ -247,6 +247,7 @@ function checkCivilWar(world, tribe, rng, log) {
   }
   splinter.rangeCenter = { x: taken[0].x, y: taken[0].y };
   splinter.peakPop = totalTribePop(world, splinter);
+  world.networkDirty = true;
 
   tribe.unity = 0.7; // what remains is the coherent core
   tribe.peakPop = totalTribePop(world, tribe);
@@ -345,17 +346,22 @@ function updateBands(world, tribe, rng, seasonFactor, log) {
 function updateSettlements(world, tribe, rng, seasonFactor, log) {
   const settlements = tribeSettlements(world, tribe.id);
   const stability = governanceStability(tribe);
-  let prosperity = tribe.tradePartners > 0 ? 1.15 : 1;
+  let tribeFactor = 1;
   // Tribute drains the payer.
   if (tribe.tributeTo !== undefined && world.year < tribe.tributeUntil) {
-    prosperity *= 0.94;
+    tribeFactor *= 0.94;
   }
   // A disunited people work against each other.
-  prosperity *= 0.8 + 0.2 * (tribe.unity ?? 1);
+  tribeFactor *= 0.8 + 0.2 * (tribe.unity ?? 1);
 
   for (const s of settlements) {
-    const cap = Math.max(20, settlementCapacity(world, s, tribe) * seasonFactor);
-    let r = 0.008 * stability * prosperity * varianceRoll(rng, tribe.traits);
+    // The economy of the place: trade and market income speed growth,
+    // and imports let route towns and mine towns outgrow their fields.
+    const pros = settlementProsperity(world, s);
+    const cap = Math.max(20,
+      settlementCapacity(world, s, tribe) * seasonFactor * pros.capBoost);
+    let r = 0.008 * stability * tribeFactor * pros.growth *
+      varianceRoll(rng, tribe.traits);
     if (s.assimilatingUntil) {
       if (world.year < s.assimilatingUntil) {
         r *= 0.4;
@@ -369,11 +375,13 @@ function updateSettlements(world, tribe, rng, seasonFactor, log) {
   }
 
   // Daughter settlements: crowded places seed new ones, within what the
-  // tribe's governance can coordinate.
+  // tribe's governance can coordinate. Crowding is judged against what
+  // the local land yields — trade-fed booms spill people outward rather
+  // than piling ever higher.
   if (settlements.length < maxSettlements(tribe)) {
     for (const s of settlements) {
-      const cap = settlementCapacity(world, s, tribe);
-      if (s.pop < 1200 || s.pop < cap * 0.6) continue;
+      const landCap = settlementCapacity(world, s, tribe);
+      if (s.pop < 1100 || s.pop < landCap * 0.45) continue;
       const site = findDaughterSite(world, s, rng);
       if (!site) continue;
       const migrants = Math.round(s.pop * 0.3);
@@ -388,6 +396,7 @@ function updateSettlements(world, tribe, rng, seasonFactor, log) {
   for (const s of [...tribeSettlements(world, tribe.id)]) {
     if (s.pop >= 15) continue;
     world.settlements = world.settlements.filter((x) => x !== s);
+    world.networkDirty = true;
     log(`${s.name} was abandoned as its people dwindled.`);
   }
 }
@@ -398,9 +407,9 @@ function findDaughterSite(world, parent, rng) {
   let best = null;
   let bestScore = 4;
 
-  for (let attempt = 0; attempt < 60; attempt++) {
+  for (let attempt = 0; attempt < 90; attempt++) {
     const angle = rng.range(0, Math.PI * 2);
-    const dist = rng.range(8, 16);
+    const dist = rng.range(6, 18);
     const x = Math.round(parent.x + Math.cos(angle) * dist);
     const y = Math.round(parent.y + Math.sin(angle) * dist);
     if (x < 4 || y < 4 || x >= size - 4 || y >= size - 4) continue;
@@ -449,6 +458,21 @@ function simulateYear(world) {
     log('A mild year with rich harvests of forage and game.');
   }
 
+  // The trade network: recomputed periodically, and soon (coalesced, not
+  // instantly) after the world changes shape — new/lost settlements,
+  // boats, roads, conquest.
+  const sinceNetwork = year - (world.lastNetworkYear || 0);
+  if (world.settlements.length > 0 &&
+      (!world.routes || (world.networkDirty && sinceNetwork >= 2) ||
+        sinceNetwork >= NETWORK_INTERVAL)) {
+    updateTradeNetwork(world);
+    computeSettlementIncome(world);
+    world.networkDirty = false;
+    world.lastNetworkYear = year;
+  }
+  // Mines are worked every year (also refreshes mine income).
+  updateExtraction(world, log);
+
   // Snapshot: a civil war can add a splinter tribe mid-year; it begins
   // living its own years from the next tick.
   for (const tribe of [...world.tribes]) {
@@ -493,6 +517,7 @@ function simulateYear(world) {
       updateBands(world, tribe, tribeRng.fork('bands'), tribeSeason, log);
     } else {
       updateSettlements(world, tribe, tribeRng.fork('towns'), tribeSeason, log);
+      buildRoads(world, tribe, log);
     }
 
     // Society.

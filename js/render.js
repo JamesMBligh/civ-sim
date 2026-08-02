@@ -254,8 +254,8 @@ function buildBaseLayer(world, view) {
           const t = (c - TEMPERATURE_RANGE.min) / (TEMPERATURE_RANGE.max - TEMPERATURE_RANGE.min);
           [r, g, b] = rampColor(TEMPERATURE_RAMP, t);
         }
-      } else if (resourceView) {
-        // Desaturated satellite base so the resource markers stand out.
+      } else if (resourceView || view === 'trade') {
+        // Desaturated satellite base so the markers/routes stand out.
         [r, g, b] = satelliteColor(world, x, y, i);
         const lum = 0.3 * r + 0.59 * g + 0.11 * b;
         const mix = sea ? 0.55 : 0.82; // keep a hint of blue in the sea
@@ -365,9 +365,97 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
 
   const resourceView = view === 'minerals' || view === 'natural';
 
+  // Tracks, roads, bridges and ferry lanes are physical infrastructure —
+  // drawn on the satellite view (toggleable, Google Maps style, default
+  // on) and the trade view. Each adjacent pair of infrastructure tiles
+  // is one segment, styled by what it actually is:
+  //   track  — faint brown (worn earth)
+  //   road   — solid brown (paved, on land)
+  //   bridge — stone grey (a road tile crossing a river)
+  //   ferry  — dashed blue (a worked water crossing or barge lane)
+  if (world.roadLevel &&
+      ((view === 'satellite' && overlays.roads !== false) || view === 'trade')) {
+    const { size, terrain, roadLevel } = world;
+    const y0 = Math.max(0, Math.floor(top));
+    const y1 = Math.min(size, Math.ceil(bottom));
+    const x0 = Math.max(0, Math.floor(left));
+    const x1 = Math.min(size, Math.ceil(right));
+    const HALF = [[1, 0], [0, 1], [1, 1], [-1, 1]];
+
+    const segments = { track: [], road: [], bridge: [], ferry: [] };
+    const category = (ia, ib) => {
+      const la = roadLevel[ia];
+      const lb = roadLevel[ib];
+      if (la === ROAD_FERRY || lb === ROAD_FERRY) return 'ferry';
+      const water = isWater(terrain[ia]) || isWater(terrain[ib]);
+      if (la === ROAD_ROAD && lb === ROAD_ROAD) return water ? 'bridge' : 'road';
+      return water ? 'ferry' : 'track';
+    };
+
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        const i = y * size + x;
+        if (roadLevel[i] === ROAD_NONE) continue;
+        for (const [dx, dy] of HALF) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+          const ni = ny * size + nx;
+          if (roadLevel[ni] === ROAD_NONE) continue;
+          segments[category(i, ni)].push(x, y, nx, ny);
+        }
+      }
+    }
+
+    const wide = Math.min(3.5, 1.2 * t.scale * TILE_PX * 0.25);
+    const thin = Math.min(2.2, 0.8 * t.scale * TILE_PX * 0.25);
+    const STYLES = [
+      ['track', 'rgba(126,102,70,0.5)', thin, []],
+      ['ferry', 'rgba(120,185,220,0.8)', thin, [4, 3]],
+      ['road', 'rgba(96,72,46,0.95)', wide, []],
+      ['bridge', 'rgba(168,168,175,0.95)', wide, []],
+    ];
+    for (const [key, color, width, dash] of STYLES) {
+      const seg = segments[key];
+      if (!seg.length) continue;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.setLineDash(dash);
+      ctx.beginPath();
+      for (let k = 0; k < seg.length; k += 4) {
+        ctx.moveTo(toScreenX(seg[k]), toScreenY(seg[k + 1]));
+        ctx.lineTo(toScreenX(seg[k + 2]), toScreenY(seg[k + 3]));
+      }
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }
+
+  // Trade routes: flow-weighted lines, gold for internal exchange and
+  // cyan for routes between peoples.
+  if (view === 'trade' && world.routes) {
+    const { size } = world;
+    for (const route of world.routes) {
+      ctx.strokeStyle = route.external
+        ? 'rgba(95,201,232,0.75)' : 'rgba(217,180,74,0.7)';
+      ctx.lineWidth = Math.min(5, 0.8 + route.flow / 8) *
+        Math.max(0.7, t.scale * TILE_PX * 0.2);
+      ctx.beginPath();
+      let started = false;
+      for (const idx of route.path) {
+        const px = toScreenX(idx % size);
+        const py = toScreenY((idx / size) | 0);
+        if (!started) { ctx.moveTo(px, py); started = true; }
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+  }
+
   // Resource markers: an optional overlay on the satellite view, a single
   // filtered category (drawn larger, with an outline) on the resource
   // views. They mark individual tiles, so they scale with the tiles.
+  // Worked-out deposits are drawn grey.
   if ((view === 'satellite' && overlays.resources) || resourceView) {
     const filter = view === 'minerals' ? 'mineral'
       : view === 'natural' ? 'natural' : null;
@@ -376,10 +464,12 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
 
     for (let y = Math.max(0, Math.floor(top)); y < Math.min(size, bottom); y++) {
       for (let x = Math.max(0, Math.floor(left)); x < Math.min(size, right); x++) {
-        const res = world.resources[y * size + x];
+        const i = y * size + x;
+        const res = world.resources[i];
         if (!res) continue;
         if (filter && res.category !== filter) continue;
-        ctx.fillStyle = res.color;
+        const dormant = world.depositSurface && depositDormant(world, i);
+        ctx.fillStyle = dormant ? '#4a4f57' : res.color;
         ctx.beginPath();
         ctx.arc(toScreenX(x), toScreenY(y), radius, 0, Math.PI * 2);
         ctx.fill();
@@ -398,7 +488,7 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
   // visible. Settled markers are solid and scale with population; bands
   // are small open rings — people passing through, not places.
   const peopleView = (view === 'satellite' && overlays.settlements) ||
-    view === 'communities' || view === 'development';
+    view === 'communities' || view === 'development' || view === 'trade';
   if (peopleView && (world.settlements || world.bands)) {
     const markerScale = Math.sqrt(camera.zoom);
     const markerRadius = (pop) => (2.5 + Math.sqrt(pop) / 5) * markerScale;

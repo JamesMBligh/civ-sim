@@ -26,9 +26,10 @@
   let world = null;
   let camera = createCamera();
   let selectedTribeId = null;
-  // Satellite overlays are off by default: the view shows only what is
-  // physically visible from above.
-  const overlays = { resources: false, settlements: false };
+  // Satellite overlays: markers off by default (the view shows what is
+  // physically visible from above); roads ARE physical, so they default
+  // on, Google Maps style.
+  const overlays = { resources: false, settlements: false, roads: true };
 
   function formatPop(n) {
     n = Math.round(n);
@@ -288,9 +289,14 @@
         `<div class="legend-row"><span class="swatch" style="background: rgb(188,172,104)"></span><span>Worked fields</span></div>`;
       legendBTitle.textContent = 'Overlays';
       resourceLegend.innerHTML =
+        `<label class="legend-row toggle-row"><input type="checkbox" id="toggle-roads"${overlays.roads ? ' checked' : ''}> Roads &amp; tracks</label>` +
         `<label class="legend-row toggle-row"><input type="checkbox" id="toggle-resources"${overlays.resources ? ' checked' : ''}> Resource markers</label>` +
         `<label class="legend-row toggle-row"><input type="checkbox" id="toggle-settlements"${overlays.settlements ? ' checked' : ''}> Settlement markers</label>` +
         (overlays.resources ? resourceSwatchRows() : '');
+      document.getElementById('toggle-roads').addEventListener('change', (ev) => {
+        overlays.roads = ev.target.checked;
+        redraw();
+      });
       document.getElementById('toggle-resources').addEventListener('change', (ev) => {
         overlays.resources = ev.target.checked;
         redraw();
@@ -300,6 +306,24 @@
         overlays.settlements = ev.target.checked;
         redraw();
       });
+    } else if (view === 'trade') {
+      legendATitle.textContent = 'Trade';
+      const line = (color, label) =>
+        `<div class="legend-row"><span class="swatch" style="background:${color}; height:4px; border-radius:2px"></span><span>${label}</span></div>`;
+      terrainLegend.innerHTML =
+        line('rgba(217,180,74,0.9)', 'Internal route (flow-weighted)') +
+        line('rgba(95,201,232,0.9)', 'Route between peoples') +
+        line('rgb(96,72,46)', 'Road') +
+        line('rgb(168,168,175)', 'Bridge') +
+        line('rgba(120,185,220,0.9)', 'Ferry / barge lane') +
+        line('rgba(126,102,70,0.6)', 'Track (worn by use)');
+      const routes = world.routes || [];
+      const external = routes.filter((r) => r.external).length;
+      legendBTitle.textContent = 'Network';
+      resourceLegend.innerHTML =
+        `<div class="stat-row"><span>Active routes</span><span class="value">${routes.length}</span></div>` +
+        `<div class="stat-row"><span>Between peoples</span><span class="value">${external}</span></div>` +
+        `<div class="stat-row"><span>Road tiles</span><span class="value">${world.roadLevel ? Array.from(world.roadLevel).filter((v) => v === 2).length : 0}</span></div>`;
     } else {
       // elevation
       legendATitle.textContent = 'Terrain';
@@ -349,6 +373,10 @@
       parts.push(`<strong>${settlement.name}</strong> — ${formatPop(settlement.pop)} people` +
         (tribe ? ` of ${tribe.name}` : '') +
         ` (founded Yr ${settlement.foundedYear})`);
+      const inc = world.settlementIncome && world.settlementIncome.get(settlement.id);
+      if (inc && (inc.trade + inc.market + inc.mine) > 0.5) {
+        parts.push(`Economy — trade ${inc.trade.toFixed(0)}, market ${inc.market.toFixed(0)}, mines ${inc.mine.toFixed(0)}`);
+      }
     } else if (world.tribes) {
       const band = bandAt(world, tile.x, tile.y);
       if (band) {

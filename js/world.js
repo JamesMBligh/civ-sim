@@ -24,6 +24,8 @@ function createWorld(seedString) {
   generateTerrain(world, rng);
   generateRivers(world, rng);
   generateResources(world, rng);
+  computeSiteFeatures(world);        // harbors, fords, confluences
+  initDeposits(world, rng.fork('deposits')); // finite mineral deposits
 
   world.stats = computeStats(world);
   return world;
