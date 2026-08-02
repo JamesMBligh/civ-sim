@@ -84,15 +84,13 @@ function dominantPostureGlyph(posture) {
 // Discipline as a variance dial: high discipline lands near expectation,
 // low discipline swings both ways. Multiplicative factor around 1.
 function varianceRoll(rng, traits) {
-  const spread = 0.35 * (1 - traits.discipline);
+  const spread = PARAMS.passionVariance * (1 - traits.discipline);
   return Math.max(0.4, 1 + rng.range(-1, 1) * spread);
 }
 
 // Yearly trait drift: tiny seeded noise plus event nudges accumulated
 // during the year (war, trade, famine...). Capped at ±0.2 from the
 // founding value so a people's character stays recognisable.
-const TRAIT_DRIFT_CAP = 0.2;
-
 function nudgeTrait(tribe, key, delta) {
   if (!tribe.nudges) tribe.nudges = {};
   tribe.nudges[key] = (tribe.nudges[key] || 0) + delta;
@@ -104,7 +102,8 @@ function driftTraits(tribe, rng) {
     v += rng.range(-0.004, 0.004);
     if (tribe.nudges && tribe.nudges[key]) v += tribe.nudges[key];
     const anchor = tribe.foundingTraits[key];
-    v = Math.max(anchor - TRAIT_DRIFT_CAP, Math.min(anchor + TRAIT_DRIFT_CAP, v));
+    const cap = PARAMS.traitDriftCap;
+    v = Math.max(anchor - cap, Math.min(anchor + cap, v));
     tribe.traits[key] = clamp01(v);
   }
   tribe.nudges = {};

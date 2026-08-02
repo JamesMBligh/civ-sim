@@ -184,6 +184,53 @@
   #events-log .ev-year { color: var(--accent); font-weight: 600; }
   .toggle-row { cursor: pointer; user-select: none; }
   .toggle-row input { accent-color: var(--accent); margin-right: 2px; }
+  .tab-bar {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--panel-border);
+    padding-bottom: 8px;
+  }
+  .tab {
+    flex: 1;
+    background: transparent;
+    border: 1px solid var(--panel-border);
+    color: var(--text-dim);
+    font-weight: 500;
+    padding: 6px 0;
+  }
+  .tab.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #08131b;
+    font-weight: 600;
+  }
+  .params-note {
+    color: var(--text-dim);
+    font-size: 12px;
+    line-height: 1.4;
+    margin-bottom: 10px;
+  }
+  .param-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0;
+  }
+  .param-row label { flex: 1; font-size: 12px; color: var(--text); }
+  .param-row label .hint { display: block; color: var(--text-dim); font-size: 11px; }
+  .param-row input {
+    width: 74px;
+    background: var(--bg);
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 12px;
+    text-align: right;
+  }
+  .param-row input.changed { border-color: var(--accent); }
+  #params-reset { margin-top: 12px; width: 100%; }
   .tribe-row { cursor: pointer; border-radius: 4px; padding-left: 4px; }
   .tribe-row:hover { background: rgba(255,255,255,0.05); }
   .tribe-row.selected { background: rgba(79,163,209,0.15); }
@@ -270,6 +317,11 @@
     <canvas id="map-canvas"></canvas>
   </div>
   <aside>
+    <div class="tab-bar">
+      <button id="tab-btn-world" class="tab active">World</button>
+      <button id="tab-btn-params" class="tab">Parameters</button>
+    </div>
+    <div id="tab-world">
     <h2>Inspect</h2>
     <div id="tile-info">Hover over the map to inspect a tile.</div>
     <div id="tribes-section" style="display: none">
@@ -285,6 +337,13 @@
     <div id="resource-legend"></div>
     <h2>Statistics</h2>
     <div id="stats"></div>
+    </div>
+    <div id="tab-params" style="display: none">
+      <div class="params-note">Values apply as the simulation continues.
+        Entries marked ⟳ take effect when a new world is generated.</div>
+      <div id="params-panel"></div>
+      <button id="params-reset" class="secondary">Reset to defaults</button>
+    </div>
   </aside>
 </main>
 <script>
@@ -911,6 +970,84 @@ function generateResources(world, rng) {
   world.resources = resources;
 }
 
+// ---- js/params.js ----
+// Tunable simulation parameters. Every entry starts at its default and
+// can be edited live from the Parameters tab; code reads PARAMS.<key> at
+// the moment of use, so most changes take effect as the simulation
+// continues. Entries marked worldgen: true only apply when a new world
+// is generated.
+
+const PARAM_DEFS = [
+  // --- Movement & roads ---
+  { key: 'roadCost', group: 'Movement & roads', label: 'Road travel cost', def: 0.08, min: 0.02, max: 1, step: 0.01,
+    hint: 'vs 1.0 open plains — lower pulls traffic onto existing roads' },
+  { key: 'trackFactor', group: 'Movement & roads', label: 'Track cost factor', def: 0.85, min: 0.3, max: 1, step: 0.05,
+    hint: 'multiplies terrain cost on worn tracks' },
+  { key: 'ferryBoatCost', group: 'Movement & roads', label: 'Ferry cost (boats)', def: 0.35, min: 0.05, max: 2, step: 0.05 },
+  { key: 'ferryWalkCost', group: 'Movement & roads', label: 'Ferry cost (no boats)', def: 1.5, min: 0.2, max: 5, step: 0.1 },
+  { key: 'riverBoatCost', group: 'Movement & roads', label: 'River cost (boats)', def: 0.35, min: 0.05, max: 2, step: 0.05 },
+  { key: 'lakeBoatCost', group: 'Movement & roads', label: 'Lake cost (boats)', def: 0.4, min: 0.05, max: 2, step: 0.05 },
+  { key: 'seaBoatCost', group: 'Movement & roads', label: 'Coastal sea cost (boats)', def: 0.45, min: 0.05, max: 2, step: 0.05 },
+  { key: 'trackThreshold', group: 'Movement & roads', label: 'Wear to form a track', def: 35, min: 5, max: 200, step: 5 },
+  { key: 'paveWearMin', group: 'Movement & roads', label: 'Wear to justify paving', def: 75, min: 10, max: 400, step: 5 },
+  { key: 'paveRateBase', group: 'Movement & roads', label: 'Paving rate (base)', def: 1, min: 0, max: 10, step: 1,
+    hint: 'road tiles per year' },
+  { key: 'paveRateDiscipline', group: 'Movement & roads', label: 'Paving rate (× discipline)', def: 2, min: 0, max: 10, step: 1 },
+
+  // --- Trade ---
+  { key: 'networkInterval', group: 'Trade', label: 'Route recompute interval (yrs)', def: 5, min: 1, max: 25, step: 1 },
+  { key: 'routeMaxCost', group: 'Trade', label: 'Max route cost', def: 120, min: 20, max: 400, step: 10,
+    hint: 'paths dearer than this form no route' },
+  { key: 'flowDistanceDamp', group: 'Trade', label: 'Flow distance damping', def: 25, min: 5, max: 100, step: 5,
+    hint: 'higher = distance hurts trade less' },
+  { key: 'externalTradeBonus', group: 'Trade', label: 'External trade value', def: 1.5, min: 0.5, max: 4, step: 0.1,
+    hint: 'income multiplier for routes between peoples' },
+  { key: 'marketShare', group: 'Trade', label: 'Through-traffic income share', def: 0.5, min: 0, max: 2, step: 0.1 },
+
+  // --- Demography ---
+  { key: 'foragerGrowth', group: 'Demography', label: 'Forager growth rate', def: 0.0025, min: 0, max: 0.02, step: 0.0005 },
+  { key: 'farmerGrowth', group: 'Demography', label: 'Farmer growth rate', def: 0.008, min: 0, max: 0.05, step: 0.001 },
+  { key: 'settlementSplitPop', group: 'Demography', label: 'Settlement split population', def: 1100, min: 200, max: 10000, step: 100 },
+  { key: 'splitCapFraction', group: 'Demography', label: 'Split at fraction of land cap', def: 0.45, min: 0.1, max: 1, step: 0.05 },
+  { key: 'harshWinterChance', group: 'Demography', label: 'Harsh winter chance', def: 0.15, min: 0, max: 0.5, step: 0.01 },
+  { key: 'mildYearChance', group: 'Demography', label: 'Mild year chance', def: 0.15, min: 0, max: 0.5, step: 0.01 },
+  { key: 'harshWinterFactor', group: 'Demography', label: 'Harsh winter food factor', def: 0.75, min: 0.3, max: 1, step: 0.05 },
+
+  // --- Knowledge ---
+  { key: 'knowledgeRate', group: 'Knowledge', label: 'Knowledge gain rate', def: 0.15, min: 0.01, max: 1, step: 0.01,
+    hint: 'scales tech, art and philosophy pools' },
+  { key: 'diffusionRate', group: 'Knowledge', label: 'Tech diffusion rate', def: 0.015, min: 0, max: 0.2, step: 0.005,
+    hint: 'chance/yr per contact that an idea spreads' },
+
+  // --- War & diplomacy ---
+  { key: 'raidLossRate', group: 'War & diplomacy', label: 'Raid loss rate', def: 0.01, min: 0, max: 0.1, step: 0.005,
+    hint: 'population lost per war year × strength ratio' },
+  { key: 'conquestChance', group: 'War & diplomacy', label: 'Conquest chance', def: 0.15, min: 0, max: 1, step: 0.05,
+    hint: '× strength ratio, when the gates are met' },
+  { key: 'incidentBase', group: 'War & diplomacy', label: 'Diplomatic incident base rate', def: 0.005, min: 0, max: 0.1, step: 0.005 },
+  { key: 'goodwillBase', group: 'War & diplomacy', label: 'Goodwill event base rate', def: 0.005, min: 0, max: 0.1, step: 0.005 },
+
+  // --- Society ---
+  { key: 'traitDriftCap', group: 'Society', label: 'Trait drift cap', def: 0.2, min: 0, max: 0.5, step: 0.05,
+    hint: 'max distance from founding character' },
+  { key: 'passionVariance', group: 'Society', label: 'Passion variance', def: 0.35, min: 0, max: 1, step: 0.05,
+    hint: 'outcome swing for low-discipline peoples' },
+  { key: 'civilWarUnity', group: 'Society', label: 'Civil war unity threshold', def: 0.4, min: 0, max: 0.9, step: 0.05 },
+  { key: 'unityRecovery', group: 'Society', label: 'Unity recovery rate', def: 0.0015, min: 0, max: 0.02, step: 0.0005 },
+
+  // --- Worldgen (apply on Generate) ---
+  { key: 'depositSurfaceMin', group: 'Worldgen', label: 'Surface deposit min', def: 80, min: 10, max: 2000, step: 10, worldgen: true },
+  { key: 'depositSurfaceMax', group: 'Worldgen', label: 'Surface deposit max', def: 200, min: 20, max: 4000, step: 10, worldgen: true },
+  { key: 'depositDeepMin', group: 'Worldgen', label: 'Deep deposit min', def: 250, min: 20, max: 5000, step: 10, worldgen: true },
+  { key: 'depositDeepMax', group: 'Worldgen', label: 'Deep deposit max', def: 600, min: 50, max: 10000, step: 10, worldgen: true },
+];
+
+const PARAMS = {};
+function resetParams() {
+  for (const def of PARAM_DEFS) PARAMS[def.key] = def.def;
+}
+resetParams();
+
 // ---- js/world.js ----
 // The World object holds the entire simulation state in memory.
 // Generation pipeline: terrain (elevation + moisture + biomes) -> rivers ->
@@ -1072,14 +1209,10 @@ function spread(access, world, cx, cy, value, radius) {
 
 const IMPASSABLE = Infinity;
 
-// Infrastructure travel costs. The gap between an established road and
-// raw terrain is what makes traffic consolidate onto existing corridors
-// instead of wearing new parallel paths — the wider the gap, the fewer
-// roads the island ends up needing.
-const COST_ROAD = 0.08;        // established road: strongly preferred (3.5:1 vs plains)
-const TRACK_FACTOR = 0.85;      // a worn track modestly eases the underlying terrain
-const COST_FERRY_BOATS = 0.35; // a worked crossing, for peoples with boats
-const COST_FERRY_WALK = 1.5;   // an operated ferry carries anyone, at a price
+// Infrastructure and boat travel costs live in PARAMS (js/params.js) —
+// editable from the Parameters tab. The gap between an established road
+// and raw terrain is what makes traffic consolidate onto existing
+// corridors instead of wearing new parallel paths.
 
 // Cost grids are rebuilt at each trade-network update (they change as
 // roads are laid) and stored as world.costWalk / world.costBoats.
@@ -1111,18 +1244,18 @@ function buildCostGrid(world, hasBoats) {
     if (hasBoats) {
       // Boats turn water into the cheapest lanes on the map: rivers
       // and coastal waters carry trade, as they did historically.
-      if (t === TERRAIN.RIVER) c = 0.35;
-      else if (t === TERRAIN.LAKE) c = 0.4;
-      else if (t === TERRAIN.OCEAN) c = 0.45;
+      if (t === TERRAIN.RIVER) c = PARAMS.riverBoatCost;
+      else if (t === TERRAIN.LAKE) c = PARAMS.lakeBoatCost;
+      else if (t === TERRAIN.OCEAN) c = PARAMS.seaBoatCost;
     }
 
     // Physical infrastructure is usable by anyone who walks it. A road
     // on a river tile is a bridge; a ferry is an operated crossing —
     // cheap for boat peoples, and it opens the water to everyone else.
-    if (roads && roads[i] === ROAD_ROAD) c = Math.min(c, COST_ROAD);
-    else if (roads && roads[i] === ROAD_TRACK) c = Math.min(c, c * TRACK_FACTOR);
+    if (roads && roads[i] === ROAD_ROAD) c = Math.min(c, PARAMS.roadCost);
+    else if (roads && roads[i] === ROAD_TRACK) c = Math.min(c, c * PARAMS.trackFactor);
     else if (roads && roads[i] === ROAD_FERRY) {
-      c = Math.min(c, hasBoats ? COST_FERRY_BOATS : COST_FERRY_WALK);
+      c = Math.min(c, hasBoats ? PARAMS.ferryBoatCost : PARAMS.ferryWalkCost);
     }
 
     cost[i] = c;
@@ -1348,15 +1481,13 @@ function dominantPostureGlyph(posture) {
 // Discipline as a variance dial: high discipline lands near expectation,
 // low discipline swings both ways. Multiplicative factor around 1.
 function varianceRoll(rng, traits) {
-  const spread = 0.35 * (1 - traits.discipline);
+  const spread = PARAMS.passionVariance * (1 - traits.discipline);
   return Math.max(0.4, 1 + rng.range(-1, 1) * spread);
 }
 
 // Yearly trait drift: tiny seeded noise plus event nudges accumulated
 // during the year (war, trade, famine...). Capped at ±0.2 from the
 // founding value so a people's character stays recognisable.
-const TRAIT_DRIFT_CAP = 0.2;
-
 function nudgeTrait(tribe, key, delta) {
   if (!tribe.nudges) tribe.nudges = {};
   tribe.nudges[key] = (tribe.nudges[key] || 0) + delta;
@@ -1368,7 +1499,8 @@ function driftTraits(tribe, rng) {
     v += rng.range(-0.004, 0.004);
     if (tribe.nudges && tribe.nudges[key]) v += tribe.nudges[key];
     const anchor = tribe.foundingTraits[key];
-    v = Math.max(anchor - TRAIT_DRIFT_CAP, Math.min(anchor + TRAIT_DRIFT_CAP, v));
+    const cap = PARAMS.traitDriftCap;
+    v = Math.max(anchor - cap, Math.min(anchor + cap, v));
     tribe.traits[key] = clamp01(v);
   }
   tribe.nudges = {};
@@ -1549,9 +1681,9 @@ function updateKnowledge(world, tribe, pop, rng, seasonFactor) {
     (0.7 + 0.3 * (tribe.unity ?? 1));
   const prosperity = tribe.tradePartners > 0 ? 1.3 : 1.0;
 
-  p.pools.tech += 0.15 * surplus * (2 * posture.learning) * (0.5 + traits.acumen);
-  p.pools.art += 0.15 * surplus * traits.artistry * (1 + 0.5 * (1 - traits.discipline)) * prosperity;
-  p.pools.philosophy += 0.15 * surplus * traits.contemplation * (1 - traits.dogmatism);
+  p.pools.tech += PARAMS.knowledgeRate * surplus * (2 * posture.learning) * (0.5 + traits.acumen);
+  p.pools.art += PARAMS.knowledgeRate * surplus * traits.artistry * (1 + 0.5 * (1 - traits.discipline)) * prosperity;
+  p.pools.philosophy += PARAMS.knowledgeRate * surplus * traits.contemplation * (1 - traits.dogmatism);
 
   // Stage ladders.
   while (p.artStage < 3 && p.pools.art >= ART_THRESHOLDS[p.artStage]) {
@@ -1602,7 +1734,7 @@ function diffuseTechs(world, rng) {
       if (!from || !to || !from.alive || !to.alive) continue;
       for (const id of from.progress.techs) {
         if (!techAvailable(world, to, id)) continue;
-        const pAdopt = 0.015 * mult * (1 - to.traits.dogmatism) * (1 - 0.5 * from.traits.cohesion);
+        const pAdopt = PARAMS.diffusionRate * mult * (1 - to.traits.dogmatism) * (1 - 0.5 * from.traits.cohesion);
         if (rng.random() < pAdopt) {
           const eraBefore = tribeEra(to);
           to.progress.techs.add(id);
@@ -2264,7 +2396,7 @@ function resolveWarYear(world, a, b, rel, rng, log) {
 
   // Raid damage falls on the loser's people, and the year's outcome
   // accumulates into the war score that peace terms are settled by.
-  const lossRate = 0.01 * ratio;
+  const lossRate = PARAMS.raidLossRate * ratio;
   damageTribe(world, loser, lossRate, rng);
   rel.grievances = Math.min(5, rel.grievances + 0.7);
   rel.warScore = (rel.warScore || 0) + (winner === a ? 1 : -1) * (ratio - 1);
@@ -2278,7 +2410,7 @@ function resolveWarYear(world, a, b, rel, rng, log) {
   // edge, the likelier the fall.
   const loserSettlements = tribeSettlements(world, loser.id);
   if (rel.warYears >= 2 && ratio > 1.4 && canConquer(winner, loser) &&
-      loserSettlements.length > 0 && rng.random() < 0.15 * ratio) {
+      loserSettlements.length > 0 && rng.random() < PARAMS.conquestChance * ratio) {
     conquerSettlement(world, winner, loser, rel, log);
   }
 }
@@ -2371,8 +2503,8 @@ function diplomaticEvent(world, a, b, rel, rng, log) {
 
   // Hot tempers and low discipline breed incidents; traders and
   // philosophers breed goodwill.
-  const pIncident = 0.005 + 0.012 * avgAggression + 0.008 * (1 - avgDiscipline);
-  const pGoodwill = 0.005 + 0.012 * avgMercantile + 0.006 * avgContemplation;
+  const pIncident = PARAMS.incidentBase + 0.012 * avgAggression + 0.008 * (1 - avgDiscipline);
+  const pGoodwill = PARAMS.goodwillBase + 0.012 * avgMercantile + 0.006 * avgContemplation;
 
   const roll = rng.random();
   if (roll < pIncident) {
@@ -2440,7 +2572,7 @@ function checkTribeDeath(world, tribe, log) {
 // use, roads built on purpose, and mineral deposits that run dry.
 // See design/economic-geography.md §3-§5.
 
-const NETWORK_INTERVAL = 5; // years between full route recomputations
+// Route recompute interval lives in PARAMS.networkInterval.
 
 // --- Trade network -------------------------------------------------------------
 
@@ -2520,10 +2652,10 @@ function updateTradeNetwork(world) {
     const ta = world.tribes[a.tribeId];
     const tb = world.tribes[b.tribeId];
     const grid = tribeHasBoatsPair(ta, tb) ? world.costBoats : world.costWalk;
-    const found = findPath(world, grid, a.y * size + a.x, b.y * size + b.x, 120);
+    const found = findPath(world, grid, a.y * size + a.x, b.y * size + b.x, PARAMS.routeMaxCost);
     if (!found) continue;
     // Flow: how much the two ends have to exchange, damped by distance.
-    const routeFlow = Math.sqrt(Math.min(a.pop, b.pop)) / (1 + found.cost / 25);
+    const routeFlow = Math.sqrt(Math.min(a.pop, b.pop)) / (1 + found.cost / PARAMS.flowDistanceDamp);
     if (routeFlow < 1) continue;
     routes.push({
       aId: a.id, bId: b.id, cost: found.cost, path: found.path, flow: routeFlow,
@@ -2542,7 +2674,7 @@ function updateTradeNetwork(world) {
   // stops.
   const wear = world.wear;
   const roads = world.roadLevel;
-  const TRACK_THRESHOLD = 35;
+  const TRACK_THRESHOLD = PARAMS.trackThreshold;
   for (let i = 0; i < wear.length; i++) {
     wear[i] = wear[i] * 0.55 + flow[i];
     if (isWater(world.terrain[i])) {
@@ -2579,7 +2711,7 @@ function computeSettlementIncome(world) {
     const a = income.get(route.aId);
     const b = income.get(route.bId);
     // External exchange is worth more than moving goods internally.
-    const value = route.flow * (route.external ? 1.5 : 1);
+    const value = route.flow * (route.external ? PARAMS.externalTradeBonus : 1);
     if (a) a.trade += value;
     if (b) b.trade += value;
 
@@ -2590,7 +2722,7 @@ function computeSettlementIncome(world) {
         const dx = (idx % size) - s.x;
         const dy = ((idx / size) | 0) - s.y;
         if (dx * dx + dy * dy <= 2) {
-          income.get(s.id).market += route.flow * 0.5;
+          income.get(s.id).market += route.flow * PARAMS.marketShare;
           break;
         }
       }
@@ -2607,7 +2739,8 @@ function buildRoads(world, tribe, log) {
   if (!tribe.progress.techs.has('roads') || !world.roadLevel) return;
   const { size } = world;
   const owner = world.influenceOwner;
-  const perYear = Math.round(1 + 2 * tribe.traits.discipline +
+  const perYear = Math.round(PARAMS.paveRateBase +
+    PARAMS.paveRateDiscipline * tribe.traits.discipline +
     (tribe.progress.governance !== 'chiefdom' ? 1 : 0));
 
   // Candidate tiles: this tribe's busy tracks — and, with the Bridges
@@ -2619,7 +2752,7 @@ function buildRoads(world, tribe, log) {
     // Only genuinely busy tiles are worth the work — this keeps braided
     // parallel paths from all being made permanent. Paving is reserved
     // for arterials, not every worn footpath.
-    if (world.wear[i] <= 75 || !owner || owner[i] !== tribe.id) continue;
+    if (world.wear[i] <= PARAMS.paveWearMin || !owner || owner[i] !== tribe.id) continue;
     if (world.roadLevel[i] === ROAD_TRACK) candidates.push(i);
     else if (world.roadLevel[i] === ROAD_FERRY && canBridge &&
              world.terrain[i] === TERRAIN.RIVER) {
@@ -2659,8 +2792,8 @@ function initDeposits(world, rng) {
   for (let i = 0; i < size * size; i++) {
     const res = resources[i];
     if (res && DEPLETABLE.has(res.id)) {
-      surface[i] = rng.int(80, 200);
-      deep[i] = rng.int(250, 600);
+      surface[i] = rng.int(PARAMS.depositSurfaceMin, PARAMS.depositSurfaceMax);
+      deep[i] = rng.int(PARAMS.depositDeepMin, PARAMS.depositDeepMax);
     }
   }
   world.depositSurface = surface;
@@ -2965,20 +3098,18 @@ function updateUnity(world, tribe) {
   const digesting = settlements.some((s) =>
     s.assimilatingUntil && world.year < s.assimilatingUntil);
   if (!digesting && over === 0) {
-    const recovery = 0.0015 *
+    const recovery = PARAMS.unityRecovery *
       (0.5 + 0.5 * tribe.traits.cohesion) *
       (0.5 + 0.5 * tribe.traits.discipline);
     tribe.unity = Math.min(1, tribe.unity + recovery);
   }
 }
 
-const CIVIL_WAR_UNITY = 0.4;
-
 function checkCivilWar(world, tribe, rng, log) {
   const settlements = tribeSettlements(world, tribe.id);
-  if (settlements.length < 3 || (tribe.unity ?? 1) >= CIVIL_WAR_UNITY) return;
+  if (settlements.length < 3 || (tribe.unity ?? 1) >= PARAMS.civilWarUnity) return;
 
-  const p = 0.1 * ((CIVIL_WAR_UNITY - tribe.unity) / CIVIL_WAR_UNITY) *
+  const p = 0.1 * ((PARAMS.civilWarUnity - tribe.unity) / PARAMS.civilWarUnity) *
     (1.5 - tribe.traits.discipline);
   if (rng.random() >= p) return;
 
@@ -3077,7 +3208,7 @@ function updateBands(world, tribe, rng, seasonFactor, log) {
     // Forager demography: very slow growth toward a low wild ceiling —
     // realistic hunter-gatherer rates (~0.1-0.3 %/yr).
     const cap = bandCapacity(world, band) * seasonFactor;
-    const r = 0.0025 * varianceRoll(rng, tribe.traits);
+    const r = PARAMS.foragerGrowth * varianceRoll(rng, tribe.traits);
     band.pop = Math.max(0, band.pop + r * band.pop * (1 - band.pop / cap));
 
     if (band.pop > 100) {
@@ -3118,7 +3249,7 @@ function updateSettlements(world, tribe, rng, seasonFactor, log) {
     const pros = settlementProsperity(world, s);
     const cap = Math.max(20,
       settlementCapacity(world, s, tribe) * seasonFactor * pros.capBoost);
-    let r = 0.008 * stability * tribeFactor * pros.growth *
+    let r = PARAMS.farmerGrowth * stability * tribeFactor * pros.growth *
       varianceRoll(rng, tribe.traits);
     if (s.assimilatingUntil) {
       if (world.year < s.assimilatingUntil) {
@@ -3139,7 +3270,8 @@ function updateSettlements(world, tribe, rng, seasonFactor, log) {
   if (settlements.length < maxSettlements(tribe)) {
     for (const s of settlements) {
       const landCap = settlementCapacity(world, s, tribe);
-      if (s.pop < 1100 || s.pop < landCap * 0.45) continue;
+      if (s.pop < PARAMS.settlementSplitPop ||
+          s.pop < landCap * PARAMS.splitCapFraction) continue;
       const site = findDaughterSite(world, s, rng);
       if (!site) continue;
       const migrants = Math.round(s.pop * 0.3);
@@ -3208,10 +3340,10 @@ function simulateYear(world) {
   const seasonRoll = rng.random();
   let harsh = false;
   let seasonFactor = 1;
-  if (seasonRoll < 0.15) {
+  if (seasonRoll < PARAMS.harshWinterChance) {
     harsh = true;
     log('A harsh winter gripped the island; food ran short everywhere.');
-  } else if (seasonRoll > 0.85) {
+  } else if (seasonRoll > 1 - PARAMS.mildYearChance) {
     seasonFactor = 1.2;
     log('A mild year with rich harvests of forage and game.');
   }
@@ -3222,7 +3354,7 @@ function simulateYear(world) {
   const sinceNetwork = year - (world.lastNetworkYear || 0);
   if (world.settlements.length > 0 &&
       (!world.routes || (world.networkDirty && sinceNetwork >= 2) ||
-        sinceNetwork >= NETWORK_INTERVAL)) {
+        sinceNetwork >= PARAMS.networkInterval)) {
     updateTradeNetwork(world);
     computeSettlementIncome(world);
     world.networkDirty = false;
@@ -3240,7 +3372,8 @@ function simulateYear(world) {
     // Harsh winters hit harder without stores; pottery softens the blow.
     let tribeSeason = seasonFactor;
     if (harsh) {
-      tribeSeason = tribe.progress.techs.has('pottery') ? 0.85 : 0.75;
+      tribeSeason = Math.min(1, PARAMS.harshWinterFactor +
+        (tribe.progress.techs.has('pottery') ? 0.1 : 0));
       nudgeTrait(tribe, 'cohesion', 0.002); // hardship binds
     }
 
@@ -4418,6 +4551,79 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
   seedInput.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter') generateBtn.click();
   });
+
+  // --- Parameters tab -------------------------------------------------------
+
+  const tabWorld = document.getElementById('tab-world');
+  const tabParams = document.getElementById('tab-params');
+  const tabBtnWorld = document.getElementById('tab-btn-world');
+  const tabBtnParams = document.getElementById('tab-btn-params');
+  const paramsPanel = document.getElementById('params-panel');
+
+  function selectTab(which) {
+    const params = which === 'params';
+    tabWorld.style.display = params ? 'none' : '';
+    tabParams.style.display = params ? '' : 'none';
+    tabBtnWorld.classList.toggle('active', !params);
+    tabBtnParams.classList.toggle('active', params);
+  }
+  tabBtnWorld.addEventListener('click', () => selectTab('world'));
+  tabBtnParams.addEventListener('click', () => selectTab('params'));
+
+  // Format a default so 0.0015 doesn't render as 0.001500...
+  function fmtParam(v) {
+    return String(parseFloat(v.toPrecision(6)));
+  }
+
+  function renderParams() {
+    const groups = [];
+    const byGroup = new Map();
+    for (const def of PARAM_DEFS) {
+      if (!byGroup.has(def.group)) {
+        byGroup.set(def.group, []);
+        groups.push(def.group);
+      }
+      byGroup.get(def.group).push(def);
+    }
+
+    paramsPanel.innerHTML = groups.map((group) =>
+      `<h2>${group}</h2>` + byGroup.get(group).map((def) =>
+        `<div class="param-row">` +
+        `<label for="param-${def.key}">${def.label}${def.worldgen ? ' ⟳' : ''}` +
+        (def.hint ? `<span class="hint">${def.hint}</span>` : '') +
+        `</label>` +
+        `<input type="number" id="param-${def.key}" data-key="${def.key}"` +
+        ` value="${fmtParam(PARAMS[def.key])}" min="${def.min}" max="${def.max}" step="${def.step}">` +
+        `</div>`).join('')
+    ).join('');
+
+    for (const input of paramsPanel.querySelectorAll('input[data-key]')) {
+      const def = PARAM_DEFS.find((d) => d.key === input.dataset.key);
+      const markChanged = () =>
+        input.classList.toggle('changed', PARAMS[def.key] !== def.def);
+      markChanged();
+      input.addEventListener('change', () => {
+        const v = parseFloat(input.value);
+        if (!Number.isFinite(v)) {
+          input.value = fmtParam(PARAMS[def.key]);
+          return;
+        }
+        PARAMS[def.key] = Math.max(def.min, Math.min(def.max, v));
+        input.value = fmtParam(PARAMS[def.key]);
+        markChanged();
+        // Movement/trade parameters reshape the network next tick.
+        if (world) world.networkDirty = true;
+      });
+    }
+  }
+
+  document.getElementById('params-reset').addEventListener('click', () => {
+    resetParams();
+    renderParams();
+    if (world) world.networkDirty = true;
+  });
+
+  renderParams();
 
   viewSelect.addEventListener('change', () => {
     if (world) refreshView();

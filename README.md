@@ -127,6 +127,18 @@ settlements changing hands — conquest, secession, assimilation —
 without either entity losing its identity, and scales cleanly from
 camp/tribe to city/nation.
 
+## Parameters tab
+
+The sidebar has two tabs: **World** (the usual panels) and
+**Parameters** — every headline tuning dial of the simulation, editable
+live: road/ferry/boat travel costs, track and paving thresholds, trade
+route settings, growth rates, season odds, knowledge and diffusion
+rates, war and diplomacy rates, trait drift, civil-war threshold, and
+mineral deposit sizes. Initial values are the defaults (shipped in
+`js/params.js`); edits apply as the simulation continues, except
+worldgen entries (marked ⟳) which take effect on the next Generate.
+Changed values are highlighted; one button resets everything.
+
 ## Built version & GitHub Pages
 
 `node build.js` bundles the app into a single self-contained
@@ -175,6 +187,7 @@ folder.
 | `js/resources.js` | Terrain-aware resource placement |
 | `js/world.js` | World state container and generation pipeline |
 | `js/render.js` | Canvas rendering, camera (zoom/pan) and map layers |
+| `js/params.js` | Tunable simulation parameters (defaults + registry) |
 | `js/geography.js` | Movement-cost surface, site features (harbors, fords), A* |
 | `js/economy.js` | Trade routes, settlement economies, roads, mineral depletion |
 | `js/traits.js` | Nine traits, archetypes, posture triangle, drift |
