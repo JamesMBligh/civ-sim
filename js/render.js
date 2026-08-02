@@ -204,8 +204,9 @@ function buildBaseLayer(world, view) {
         g = g + (lum - g) * mix;
         b = b + (lum - b) * mix;
         r *= 0.7; g *= 0.7; b *= 0.7;
-      } else if (view === 'communities') {
-        // Muted satellite base tinted by whichever tribe holds the tile.
+      } else if (view === 'communities' || view === 'development') {
+        // Muted satellite base tinted by whichever tribe holds the tile —
+        // tribe colour for Communities, era colour for Development.
         [r, g, b] = satelliteColor(world, x, y, i);
         const lum = 0.3 * r + 0.59 * g + 0.11 * b;
         const mix = sea ? 0.4 : 0.65;
@@ -214,12 +215,20 @@ function buildBaseLayer(world, view) {
         b = (b + (lum - b) * mix) * 0.8;
 
         const ownerId = world.influenceOwner ? world.influenceOwner[i] : -1;
-        if (ownerId >= 0 && tribeRgb[ownerId]) {
-          const a = 0.2 + world.influenceStrength[i] * 0.45;
-          const [tr, tg, tb] = tribeRgb[ownerId];
-          r = r * (1 - a) + tr * a;
-          g = g * (1 - a) + tg * a;
-          b = b * (1 - a) + tb * a;
+        if (ownerId >= 0 && world.tribes && world.tribes[ownerId]) {
+          let tint = null;
+          if (view === 'communities') {
+            tint = tribeRgb[ownerId];
+          } else {
+            const era = tribeEra(world.tribes[ownerId]);
+            tint = hexToRgb(ERA_COLORS[era]);
+          }
+          if (tint) {
+            const a = 0.2 + world.influenceStrength[i] * 0.45;
+            r = r * (1 - a) + tint[0] * a;
+            g = g * (1 - a) + tint[1] * a;
+            b = b * (1 - a) + tint[2] * a;
+          }
         }
       } else {
         // satellite
@@ -305,13 +314,16 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
     }
   }
 
-  // Settlements (places) are drawn on the satellite and communities views,
-  // coloured by the tribe they give allegiance to. Marker size scales with
-  // population, and grows gently with zoom rather than tile-for-tile.
-  if ((view === 'satellite' || view === 'communities') && world.settlements) {
+  // Settlements (places) and bands (nomadic presences) are drawn on the
+  // satellite, communities and development views, coloured by the tribe
+  // they answer to. Settled markers are solid and scale with population;
+  // bands are small open rings — people passing through, not places.
+  const peopleView = view === 'satellite' || view === 'communities' || view === 'development';
+  if (peopleView && (world.settlements || world.bands)) {
     const markerScale = Math.sqrt(camera.zoom);
+    const markerRadius = (pop) => (2.5 + Math.sqrt(pop) / 5) * markerScale;
 
-    for (const s of world.settlements) {
+    for (const s of world.settlements || []) {
       const tribe = world.tribes[s.tribeId];
       if (!tribe || !tribe.alive || !visible(s.x, s.y)) continue;
       ctx.fillStyle = tribe.color;
@@ -319,8 +331,18 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
       ctx.lineWidth = 1.4;
       ctx.beginPath();
       ctx.arc(toScreenX(s.x), toScreenY(s.y),
-        (2.5 + Math.sqrt(s.pop) / 5) * markerScale, 0, Math.PI * 2);
+        Math.min(14 * markerScale, markerRadius(s.pop)), 0, Math.PI * 2);
       ctx.fill();
+      ctx.stroke();
+    }
+
+    for (const band of world.bands || []) {
+      const tribe = world.tribes[band.tribeId];
+      if (!tribe || !tribe.alive || !visible(band.x, band.y)) continue;
+      ctx.strokeStyle = tribe.color;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(toScreenX(band.x), toScreenY(band.y), 2.2 * markerScale, 0, Math.PI * 2);
       ctx.stroke();
     }
 
@@ -335,13 +357,22 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
       ctx.fillText(text, screenX, screenY);
     };
 
-    if (view === 'communities') {
+    if (view === 'communities' || view === 'development') {
       for (const tribe of world.tribes) {
         if (!tribe.alive) continue;
-        const chief = tribeChiefSettlement(world, tribe);
-        if (!chief || !visible(chief.x, chief.y)) continue;
-        const radius = (2.5 + Math.sqrt(chief.pop) / 5) * markerScale;
-        label(tribe.name, toScreenX(chief.x), toScreenY(chief.y) - radius - 5,
+        // Settled peoples are labelled at their chief settlement; nomads
+        // at their largest band.
+        let anchor = tribeChiefSettlement(world, tribe);
+        if (!anchor) {
+          for (const band of world.bands || []) {
+            if (band.tribeId === tribe.id && (!anchor || band.pop > anchor.pop)) {
+              anchor = band;
+            }
+          }
+        }
+        if (!anchor || !visible(anchor.x, anchor.y)) continue;
+        const radius = markerRadius(anchor.pop);
+        label(tribe.name, toScreenX(anchor.x), toScreenY(anchor.y) - radius - 5,
           'bold 12px system-ui, sans-serif');
       }
     }
@@ -349,10 +380,10 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
     // Zoomed in far enough to read the map in detail: name the places
     // themselves, which is the point of having settlements as entities.
     if (camera.zoom >= 2.5) {
-      for (const s of world.settlements) {
+      for (const s of world.settlements || []) {
         const tribe = world.tribes[s.tribeId];
         if (!tribe || !tribe.alive || !visible(s.x, s.y)) continue;
-        const radius = (2.5 + Math.sqrt(s.pop) / 5) * markerScale;
+        const radius = Math.min(14 * markerScale, markerRadius(s.pop));
         label(s.name, toScreenX(s.x), toScreenY(s.y) + radius + 12,
           '11px system-ui, sans-serif');
       }

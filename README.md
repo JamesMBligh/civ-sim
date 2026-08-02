@@ -42,31 +42,45 @@ python3 -m http.server 8000
 # then visit http://localhost:8000
 ```
 
-## Current stage: primitive tribes
+## Current stage: how tribes evolve
 
-Press **Found tribes & simulate 10 years** to introduce 7 tribes at the
-most attractive sites on the island (river valleys, fertile lowland,
-rich coasts — scored the way early peoples actually chose ground) and
-run ten years of activity. Press again to run further decades.
+Press **Found tribes & simulate 10 years** to introduce 7 tribes as
+wandering bands of foragers, then press again to watch centuries
+unfold. Full design in `design/tribe-evolution.md`.
 
-Each simulated year:
-
-- Every settlement gathers food from the land within its reach; the
-  local mix of fertile soil, fish, game and river frontage sets a
-  carrying capacity, and population grows (or shrinks) toward it.
-- Mild years and harsh winters sweep the whole island, echoing through
+- **Traits.** Every tribe has nine dispositions (cohesion, dogmatism,
+  physicality, acumen, aggression, mercantile, artistry, contemplation,
+  discipline) that guide everything it does. Six tribes draw from
+  real-civilization archetypes — Hellenic, Roman, Israelite,
+  Philistine, Persian, Han — with jitter; traits drift slowly with
+  history (war hardens, trade opens) but stay within ±0.2 of their
+  founding values. `discipline` is a variance dial: passionate peoples
+  swing between golden ages and disasters, disciplined ones compound.
+- **Nomads first.** Tribes begin as mobile bands — people, not places —
+  with realistic forager demography (near-static populations).
+  Mastering Agriculture ends the wandering: bands converge to found the
+  tribe's first named settlement, and farming demography takes over
+  (populations climb into the tens of thousands over centuries).
+- **Knowledge.** Surplus feeds tech, art and philosophy pools; a
+  ~20-node tech tree is heavily resource-gated (Bronze Working needs
+  copper *and tin* within reach or via a trade partner), so the ore
+  provinces shape who advances. Eras — Paleolithic through Iron Age —
+  are per-tribe, and ideas also diffuse between peoples in contact.
+- **Relations.** Contact becomes trade, rivalry or war depending on
+  both sides' dispositions and resource envy. Trade shares resource
+  access and speeds diffusion; war brings raids and, with a sustained
+  edge, conquest — a settlement keeps its name and people but changes
+  allegiance.
+- **Society.** Governance ladders from band society through chiefdom
+  to theocracy, kingship, council rule or merchant oligarchy, branching
+  on traits; art and philosophy advance in stages that echo through
   the chronicle.
-- A crowded settlement buds off a daughter camp on the best nearby
-  unclaimed ground; failed camps are abandoned, and a tribe with no
-  camps left dies out.
-- Each tribe projects influence around its settlements — stronger with
-  population, fading with distance. The **Communities** view paints
-  every tile with the colour of whichever tribe holds it, and the
-  chronicle notes when two tribes' territories meet.
 
-The sidebar shows each tribe's population, camps and territory, plus a
-chronicle of notable events. Simulation is deterministic per seed, like
-the landscape itself.
+The **Development** view colours each territory by its tribe's era;
+the tribes panel shows era badges and posture glyphs (⚔ military,
+⚖ trade, 📜 learning), and clicking a tribe opens a full inspector —
+trait bars, technologies, governance, relations. Simulation remains
+deterministic per seed.
 
 ### Tribes vs settlements
 
@@ -128,8 +142,11 @@ folder.
 | `js/resources.js` | Terrain-aware resource placement |
 | `js/world.js` | World state container and generation pipeline |
 | `js/render.js` | Canvas rendering, camera (zoom/pan) and map layers |
-| `js/tribes.js` | Tribes (social) & settlements (place): founding, naming, allegiance |
-| `js/sim.js` | Yearly simulation: food, growth, expansion, influence |
+| `js/traits.js` | Nine traits, archetypes, posture triangle, drift |
+| `js/tech.js` | Tech tree, eras, knowledge pools, discovery & diffusion |
+| `js/tribes.js` | Tribes (social), bands (nomadic) & settlements (place) |
+| `js/relations.js` | Contact, trade, rivalry, war, conquest |
+| `js/sim.js` | Yearly simulation: demography, governance, influence |
 | `js/main.js` | UI wiring |
 | `build.js` | Bundles everything into `docs/index.html` for GitHub Pages |
 
@@ -138,5 +155,6 @@ folder.
 1. ✅ Landscape generation
 2. ✅ Introduce primitive tribes at plausible starting locations
 3. ✅ Simulate ten years of activity (foraging, settlement, growth)
-4. Let the user intervene and observe the consequences
-5. Deepen the model over time (agriculture, trade, conflict, culture…)
+4. ✅ Tribe evolution: traits, technology, relations, governance
+5. Let the user intervene and observe the consequences
+6. Deepen the model over time (cities, nations, writing history…)
