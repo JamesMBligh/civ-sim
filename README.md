@@ -22,6 +22,12 @@ plausible Earth-like landscape:
 - **Resources** placed where they'd plausibly occur: ores and stone in the
   mountains, timber and game in forests, fish along the coasts, fertile
   soil and clay in river valleys, salt on the shore.
+- **Age-defining minerals**: the mineral set covers the strategic
+  materials of early civilizations — flint and obsidian (Stone Age),
+  copper, tin, gold, silver and lead (Bronze Age), and iron ore
+  (Iron Age). The scarce metals (tin, gold, silver/lead) only occur in a
+  couple of regional "ore provinces" per map, mirroring how deposits like
+  Cornish tin concentrated in one district and drove long-distance trade.
 
 Everything runs in memory in the browser — plain JavaScript, no build
 step, no dependencies. Maps are reproducible: the same seed always
@@ -47,7 +53,8 @@ python3 -m http.server 8000
   - *Avg temperature* — annual mean temperature (latitude + altitude)
   - *Natural resources* — fish, game, timber and fertile soil over a
     desaturated base map
-  - *Mineral resources* — stone, copper, iron, clay and salt deposits
+  - *Mineral resources* — stone, flint, obsidian, copper, tin, iron,
+    gold, silver, lead, clay and salt deposits
 - **Hover** the map to inspect any tile (terrain, elevation, moisture,
   resource).
 
