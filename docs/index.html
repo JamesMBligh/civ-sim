@@ -182,6 +182,56 @@
     color: var(--text-dim);
   }
   #events-log .ev-year { color: var(--accent); font-weight: 600; }
+  .tribe-row { cursor: pointer; border-radius: 4px; padding-left: 4px; }
+  .tribe-row:hover { background: rgba(255,255,255,0.05); }
+  .tribe-row.selected { background: rgba(79,163,209,0.15); }
+  .tribe-row .badge {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: var(--bg);
+    border: 1px solid var(--panel-border);
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+  #tribe-inspector {
+    background: var(--bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    padding: 10px;
+    margin-top: 8px;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  #tribe-inspector h3 { font-size: 13px; margin-bottom: 2px; }
+  #tribe-inspector .insp-sub { color: var(--text-dim); margin-bottom: 6px; }
+  .trait-row { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+  .trait-row .trait-name { width: 92px; color: var(--text-dim); font-size: 11px; }
+  .trait-bar {
+    flex: 1;
+    height: 6px;
+    background: var(--panel-border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .trait-bar > div { height: 100%; border-radius: 3px; }
+  .posture-row {
+    display: flex;
+    gap: 6px;
+    margin: 6px 0;
+  }
+  .posture-row span {
+    flex: 1;
+    text-align: center;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 3px;
+    padding: 3px 0;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  #tribe-inspector .insp-section { margin-top: 6px; color: var(--text-dim); }
+  #tribe-inspector .insp-section strong { color: var(--text); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -197,6 +247,7 @@
     <select id="view-select">
       <option value="satellite">Satellite</option>
       <option value="communities">Communities</option>
+      <option value="development">Development</option>
       <option value="elevation">Elevation</option>
       <option value="rainfall">Avg rainfall</option>
       <option value="temperature">Avg temperature</option>
@@ -221,6 +272,7 @@
     <div id="tribes-section" style="display: none">
       <h2>Tribes</h2>
       <div id="tribes-panel"></div>
+      <div id="tribe-inspector" style="display: none"></div>
       <h2>Chronicle</h2>
       <div id="events-log"></div>
     </div>
@@ -927,6 +979,347 @@ function tileAt(world, x, y) {
   };
 }
 
+// ---- js/traits.js ----
+// Traits: the dispositions of a people. Traits are causes — slow-moving
+// character that shapes behaviour. Progress (js/tech.js) is effect.
+// See design/tribe-evolution.md §2.
+
+const TRAIT_KEYS = ['cohesion', 'dogmatism', 'physicality', 'acumen',
+  'aggression', 'mercantile', 'artistry', 'contemplation', 'discipline'];
+
+const TRAIT_LABELS = {
+  cohesion: 'Cohesion',
+  dogmatism: 'Dogmatism',
+  physicality: 'Physicality',
+  acumen: 'Acumen',
+  aggression: 'Aggression',
+  mercantile: 'Mercantile',
+  artistry: 'Artistry',
+  contemplation: 'Contemplation',
+  discipline: 'Discipline',
+};
+
+// Real-civilization presets. Unlisted traits default to 0.5.
+const ARCHETYPES = {
+  hellenic: {
+    label: 'Hellenic',
+    traits: { contemplation: 0.9, artistry: 0.8, acumen: 0.8, mercantile: 0.7, cohesion: 0.3, dogmatism: 0.2, discipline: 0.35, aggression: 0.5, physicality: 0.55 },
+  },
+  roman: {
+    label: 'Roman',
+    traits: { cohesion: 0.85, aggression: 0.7, acumen: 0.75, discipline: 0.9, dogmatism: 0.5, contemplation: 0.4, mercantile: 0.55, artistry: 0.45, physicality: 0.65 },
+  },
+  israelite: {
+    label: 'Israelite',
+    traits: { cohesion: 0.9, dogmatism: 0.8, contemplation: 0.8, discipline: 0.7, mercantile: 0.5, aggression: 0.35, artistry: 0.5, acumen: 0.65, physicality: 0.5 },
+  },
+  philistine: {
+    label: 'Philistine',
+    traits: { mercantile: 0.8, aggression: 0.65, physicality: 0.7, artistry: 0.55, cohesion: 0.5, discipline: 0.5, dogmatism: 0.45, acumen: 0.55, contemplation: 0.35 },
+  },
+  persian: {
+    label: 'Persian',
+    traits: { acumen: 0.7, mercantile: 0.75, dogmatism: 0.35, cohesion: 0.6, contemplation: 0.6, discipline: 0.7, aggression: 0.55, artistry: 0.6, physicality: 0.55 },
+  },
+  han: {
+    label: 'Han',
+    traits: { acumen: 0.85, contemplation: 0.75, artistry: 0.7, cohesion: 0.75, dogmatism: 0.6, discipline: 0.85, mercantile: 0.6, aggression: 0.4, physicality: 0.5 },
+  },
+};
+
+function clamp01(v, lo = 0.02, hi = 0.98) {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+// Roll a tribe's founding traits: an archetype with ±0.1 jitter, or a
+// fully random people.
+function rollTraits(rng, archetypeId) {
+  const traits = {};
+  const preset = archetypeId && ARCHETYPES[archetypeId]
+    ? ARCHETYPES[archetypeId].traits : null;
+  for (const key of TRAIT_KEYS) {
+    const base = preset ? (preset[key] !== undefined ? preset[key] : 0.5)
+      : rng.range(0.2, 0.8);
+    const jitter = preset ? rng.range(-0.1, 0.1) : 0;
+    traits[key] = clamp01(base + jitter);
+  }
+  return traits;
+}
+
+// The posture triangle: how a people prefers to spend surplus effort.
+// Derived from traits, never stored. Discipline deliberately stays out —
+// it shapes how well a posture is executed, not which one is preferred.
+function computePosture(traits) {
+  const military = 0.4 * traits.aggression + 0.3 * traits.cohesion + 0.3 * traits.physicality;
+  const trade = 0.4 * traits.mercantile + 0.3 * (1 - traits.cohesion) + 0.3 * (1 - traits.dogmatism);
+  const learning = 0.4 * traits.acumen + 0.3 * traits.contemplation + 0.3 * (1 - traits.dogmatism);
+  const sum = military + trade + learning;
+  return { military: military / sum, trade: trade / sum, learning: learning / sum };
+}
+
+function dominantPostureGlyph(posture) {
+  if (posture.military >= posture.trade && posture.military >= posture.learning) return '⚔';
+  if (posture.trade >= posture.learning) return '⚖';
+  return '📜';
+}
+
+// Discipline as a variance dial: high discipline lands near expectation,
+// low discipline swings both ways. Multiplicative factor around 1.
+function varianceRoll(rng, traits) {
+  const spread = 0.35 * (1 - traits.discipline);
+  return Math.max(0.4, 1 + rng.range(-1, 1) * spread);
+}
+
+// Yearly trait drift: tiny seeded noise plus event nudges accumulated
+// during the year (war, trade, famine...). Capped at ±0.2 from the
+// founding value so a people's character stays recognisable.
+const TRAIT_DRIFT_CAP = 0.2;
+
+function nudgeTrait(tribe, key, delta) {
+  if (!tribe.nudges) tribe.nudges = {};
+  tribe.nudges[key] = (tribe.nudges[key] || 0) + delta;
+}
+
+function driftTraits(tribe, rng) {
+  for (const key of TRAIT_KEYS) {
+    let v = tribe.traits[key];
+    v += rng.range(-0.004, 0.004);
+    if (tribe.nudges && tribe.nudges[key]) v += tribe.nudges[key];
+    const anchor = tribe.foundingTraits[key];
+    v = Math.max(anchor - TRAIT_DRIFT_CAP, Math.min(anchor + TRAIT_DRIFT_CAP, v));
+    tribe.traits[key] = clamp01(v);
+  }
+  tribe.nudges = {};
+}
+
+// ---- js/tech.js ----
+// Technology, eras, and the knowledge pools. Progress is attainment —
+// what a people has achieved — and is driven by traits + geography.
+// See design/tribe-evolution.md §4.
+
+// Era is derived from technologies held, never stored.
+const ERAS = ['paleolithic', 'neolithic', 'chalcolithic', 'bronze', 'iron'];
+const ERA_LABELS = {
+  paleolithic: 'Paleolithic',
+  neolithic: 'Neolithic',
+  chalcolithic: 'Chalcolithic',
+  bronze: 'Bronze Age',
+  iron: 'Iron Age',
+};
+const ERA_COLORS = {
+  paleolithic: '#8a7f6a',
+  neolithic: '#6aa84f',
+  chalcolithic: '#2fa198',
+  bronze: '#d08a2e',
+  iron: '#7f95b5',
+};
+
+// The tree is small, hand-authored, and heavily resource-gated: what a
+// people can become depends on what their ground (or their trading
+// partners' ground) holds. category weights the choice of research
+// target by the tribe's posture.
+const TECHS = {
+  fishing: { name: 'Fishing', cost: 40, category: 'subsistence', prereqs: [], needsResources: ['fish'] },
+  boats: { name: 'Boats', cost: 90, category: 'trade', prereqs: ['fishing'] },
+  agriculture: { name: 'Agriculture', cost: 120, category: 'subsistence', prereqs: [], needsResources: ['fertile'] },
+  irrigation: { name: 'Irrigation', cost: 160, category: 'subsistence', prereqs: ['agriculture'] },
+  husbandry: { name: 'Animal Husbandry', cost: 130, category: 'subsistence', prereqs: ['agriculture'], needsResources: ['game'] },
+  pottery: { name: 'Pottery', cost: 90, category: 'learning', prereqs: [], needsResources: ['clay'] },
+  copper_working: { name: 'Copper Working', cost: 180, category: 'learning', prereqs: ['pottery'], needsResources: ['copper'] },
+  bronze_working: { name: 'Bronze Working', cost: 260, category: 'learning', prereqs: ['copper_working'], needsResources: ['copper', 'tin'] },
+  iron_working: { name: 'Iron Working', cost: 420, category: 'learning', prereqs: ['bronze_working'], needsResources: ['iron'] },
+  writing: { name: 'Writing', cost: 240, category: 'learning', prereqs: ['pottery'], needsPhilStage: 2 },
+  law: { name: 'Law', cost: 280, category: 'learning', prereqs: ['writing'] },
+  masonry: { name: 'Masonry', cost: 200, category: 'learning', prereqs: [], needsResources: ['stone'] },
+  barter: { name: 'Barter Custom', cost: 60, category: 'trade', prereqs: [] },
+  trade_routes: { name: 'Trade Routes', cost: 190, category: 'trade', prereqs: ['barter'] },
+  currency: { name: 'Currency', cost: 380, category: 'trade', prereqs: ['trade_routes', 'bronze_working'] },
+  raiding: { name: 'Organised Raiding', cost: 70, category: 'military', prereqs: [] },
+  warriors: { name: 'Professional Warriors', cost: 240, category: 'military', prereqs: ['raiding'] },
+  fortifications: { name: 'Fortifications', cost: 320, category: 'military', prereqs: ['masonry', 'warriors'] },
+};
+
+function tribeEra(tribe) {
+  const t = tribe.progress.techs;
+  if (t.has('iron_working')) return 'iron';
+  if (t.has('bronze_working')) return 'bronze';
+  if (t.has('copper_working')) return 'chalcolithic';
+  if (t.has('agriculture')) return 'neolithic';
+  return 'paleolithic';
+}
+
+// Dogmatism makes every idea more expensive to accept.
+function effectiveCost(tech, traits) {
+  return tech.cost * (0.6 + 0.8 * traits.dogmatism);
+}
+
+// Which resources a tribe can draw on: anything inside its influence,
+// near its bands, or held by a trade partner (one hop).
+function computeResourceAccess(world) {
+  const { size } = world;
+  const owner = world.influenceOwner;
+  for (const tribe of world.tribes) tribe.resourceAccess = new Set();
+
+  if (owner) {
+    for (let i = 0; i < size * size; i++) {
+      const res = world.resources[i];
+      if (!res || owner[i] < 0) continue;
+      const tribe = world.tribes[owner[i]];
+      if (tribe && tribe.alive) tribe.resourceAccess.add(res.id);
+    }
+  }
+
+  // Nomads reach whatever lies around their bands.
+  const REACH = 5;
+  for (const band of world.bands || []) {
+    const tribe = world.tribes[band.tribeId];
+    if (!tribe || !tribe.alive) continue;
+    for (let dy = -REACH; dy <= REACH; dy++) {
+      for (let dx = -REACH; dx <= REACH; dx++) {
+        const nx = band.x + dx;
+        const ny = band.y + dy;
+        if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+        const res = world.resources[ny * size + nx];
+        if (res) tribe.resourceAccess.add(res.id);
+      }
+    }
+  }
+
+  // Trade shares access (one hop, applied simultaneously).
+  const shared = world.tribes.map((t) => new Set(t.resourceAccess));
+  for (const [key, rel] of Object.entries(world.relations || {})) {
+    if (rel.stance !== 'trade') continue;
+    const [a, b] = key.split('-').map(Number);
+    const ta = world.tribes[a];
+    const tb = world.tribes[b];
+    if (!ta || !tb || !ta.alive || !tb.alive) continue;
+    for (const r of shared[a]) tb.resourceAccess.add(r);
+    for (const r of shared[b]) ta.resourceAccess.add(r);
+  }
+}
+
+function techAvailable(world, tribe, id) {
+  const tech = TECHS[id];
+  const p = tribe.progress;
+  if (p.techs.has(id)) return false;
+  if (tech.prereqs.some((pre) => !p.techs.has(pre))) return false;
+  if (tech.needsPhilStage && p.philStage < tech.needsPhilStage) return false;
+  if (tech.needsResources &&
+      tech.needsResources.some((r) => !tribe.resourceAccess.has(r))) return false;
+  return true;
+}
+
+// Pick a research target: the cheapest available tech, discounted by how
+// well its category matches the tribe's posture.
+function chooseResearchTarget(world, tribe) {
+  const posture = computePosture(tribe.traits);
+  const weight = {
+    subsistence: 1.0,
+    learning: 0.6 + 0.8 * posture.learning,
+    trade: 0.6 + 0.8 * posture.trade,
+    military: 0.6 + 0.8 * posture.military,
+  };
+  let best = null;
+  let bestScore = Infinity;
+  for (const id of Object.keys(TECHS)) {
+    if (!techAvailable(world, tribe, id)) continue;
+    const score = effectiveCost(TECHS[id], tribe.traits) / (weight[TECHS[id].category] || 1);
+    if (score < bestScore) {
+      bestScore = score;
+      best = id;
+    }
+  }
+  return best;
+}
+
+const ART_STAGES = ['—', 'Craft decoration', 'Monumental works', 'Distinctive style'];
+const PHIL_STAGES = ['—', 'Oral tradition', 'Cosmology', 'Schools of thought'];
+const ART_THRESHOLDS = [120, 500, 1500];
+const PHIL_THRESHOLDS = [100, 400, 1200];
+
+// Yearly knowledge update for one tribe: feed the pools from surplus
+// effort, advance art/philosophy stages, and try to complete the current
+// research target. Returns discovery/stage events as strings.
+function updateKnowledge(world, tribe, pop, rng, seasonFactor) {
+  const events = [];
+  const p = tribe.progress;
+  const traits = tribe.traits;
+  const posture = computePosture(traits);
+  const v = varianceRoll(rng, traits);
+
+  // Surplus effort scales with sqrt(pop): bigger societies free more
+  // hands, with diminishing returns.
+  const surplus = Math.sqrt(Math.max(0, pop)) * seasonFactor * v;
+  const prosperity = tribe.tradePartners > 0 ? 1.3 : 1.0;
+
+  p.pools.tech += 0.15 * surplus * (2 * posture.learning) * (0.5 + traits.acumen);
+  p.pools.art += 0.15 * surplus * traits.artistry * (1 + 0.5 * (1 - traits.discipline)) * prosperity;
+  p.pools.philosophy += 0.15 * surplus * traits.contemplation * (1 - traits.dogmatism);
+
+  // Stage ladders.
+  while (p.artStage < 3 && p.pools.art >= ART_THRESHOLDS[p.artStage]) {
+    p.artStage++;
+    nudgeTrait(tribe, 'cohesion', 0.01);
+    events.push(`${tribe.name} attained ${ART_STAGES[p.artStage].toLowerCase()} in their art.`);
+  }
+  while (p.philStage < 3 && p.pools.philosophy >= PHIL_THRESHOLDS[p.philStage]) {
+    p.philStage++;
+    events.push(`${tribe.name} developed ${PHIL_STAGES[p.philStage].toLowerCase()}.`);
+  }
+
+  // Research: retarget freely (cheap), then complete when the pool covers
+  // the effective cost.
+  p.target = chooseResearchTarget(world, tribe);
+  if (p.target) {
+    const cost = effectiveCost(TECHS[p.target], traits);
+    if (p.pools.tech >= cost) {
+      p.pools.tech -= cost;
+      const eraBefore = tribeEra(tribe);
+      p.techs.add(p.target);
+      events.push(`${tribe.name} mastered ${TECHS[p.target].name}.`);
+      const eraAfter = tribeEra(tribe);
+      if (eraAfter !== eraBefore) {
+        events.push(`${tribe.name} entered the ${ERA_LABELS[eraAfter]}.`);
+      }
+      p.target = null;
+    }
+  }
+  return events;
+}
+
+// Ideas travel with contact. Adoption still requires prereqs and
+// resources — you cannot copy bronze-working without tin.
+function diffuseTechs(world, rng) {
+  const events = [];
+  const intensity = { trade: 3, contact: 1, rivalry: 0.6, war: 0.5 };
+
+  for (const [key, rel] of Object.entries(world.relations || {})) {
+    const mult = intensity[rel.stance] || 0;
+    if (!mult) continue;
+    const [aId, bId] = key.split('-').map(Number);
+    const pair = [[aId, bId], [bId, aId]];
+    for (const [fromId, toId] of pair) {
+      const from = world.tribes[fromId];
+      const to = world.tribes[toId];
+      if (!from || !to || !from.alive || !to.alive) continue;
+      for (const id of from.progress.techs) {
+        if (!techAvailable(world, to, id)) continue;
+        const pAdopt = 0.015 * mult * (1 - to.traits.dogmatism) * (1 - 0.5 * from.traits.cohesion);
+        if (rng.random() < pAdopt) {
+          const eraBefore = tribeEra(to);
+          to.progress.techs.add(id);
+          events.push(`${to.name} learned ${TECHS[id].name} from ${from.name}.`);
+          if (tribeEra(to) !== eraBefore) {
+            events.push(`${to.name} entered the ${ERA_LABELS[tribeEra(to)]}.`);
+          }
+          break; // one adoption per pair-direction per year
+        }
+      }
+    }
+  }
+  return events;
+}
+
 // ---- js/tribes.js ----
 // Tribes and settlements.
 //
@@ -1074,13 +1467,78 @@ function settlementScore(world, x, y) {
   return score;
 }
 
+// --- Bands: nomadic groups of people, not places -------------------------
+// While a tribe is nomadic it has no settlements. Its presence on the map
+// is its bands: unnamed, mobile, and transient. Named places begin only
+// when agriculture roots a people to the ground.
+
+function createBand(world, x, y, pop, tribeId) {
+  const band = {
+    id: world.nextBandId++,
+    x, y, pop, tribeId,
+    lastMove: world.year || 0,
+  };
+  world.bands.push(band);
+  return band;
+}
+
+function tribeBands(world, tribeId) {
+  return world.bands.filter((b) => b.tribeId === tribeId);
+}
+
+function tribeIsNomadic(world, tribe) {
+  return tribeSettlements(world, tribe.id).length === 0;
+}
+
+function bandAt(world, x, y, radius = 1) {
+  if (!world.bands) return null;
+  for (const b of world.bands) {
+    if (Math.abs(b.x - x) <= radius && Math.abs(b.y - y) <= radius) return b;
+  }
+  return null;
+}
+
+// Sedentism: called when a tribe masters Agriculture (or qualifies for a
+// fishing proto-village). Its bands converge on the best ground in their
+// range and become the tribe's first true settlement.
+function settleTribe(world, tribe, rng, { proto = false } = {}) {
+  const { size } = world;
+  const bands = tribeBands(world, tribe.id);
+  if (bands.length === 0) return null;
+
+  const cx = Math.round(bands.reduce((s, b) => s + b.x, 0) / bands.length);
+  const cy = Math.round(bands.reduce((s, b) => s + b.y, 0) / bands.length);
+
+  let best = null;
+  let bestScore = -Infinity;
+  const R = 14;
+  for (let dy = -R; dy <= R; dy++) {
+    for (let dx = -R; dx <= R; dx++) {
+      const x = cx + dx;
+      const y = cy + dy;
+      if (x < 4 || y < 4 || x >= size - 4 || y >= size - 4) continue;
+      const s = settlementScore(world, x, y);
+      if (s > bestScore) { bestScore = s; best = { x, y }; }
+    }
+  }
+  if (!best) return null;
+
+  const totalPop = bands.reduce((s, b) => s + b.pop, 0);
+  world.bands = world.bands.filter((b) => b.tribeId !== tribe.id);
+  const settlement = createSettlement(world, rng, best.x, best.y, totalPop, tribe.id);
+  if (proto) settlement.proto = true;
+  tribe.sedentaryYear = world.year;
+  return settlement;
+}
+
 function foundTribes(world, count = 7) {
   const rng = new RNG(world.seed + ':tribes');
   const { size } = world;
-  const MIN_SEPARATION = 26; // tiles (~100 km) between founding sites
+  const MIN_SEPARATION = 26; // tiles (~100 km) between home ranges
 
   // Score every eligible tile, then greedily take the best sites that
-  // keep their distance from already-chosen ones.
+  // keep their distance from already-chosen ones. These are home-range
+  // centres, not settlements — the arrivals are nomads.
   const scored = [];
   for (let y = 4; y < size - 4; y++) {
     for (let x = 4; x < size - 4; x++) {
@@ -1103,174 +1561,632 @@ function foundTribes(world, count = 7) {
 
   world.year = 0;
   world.settlements = [];
+  world.bands = [];
   world.nextSettlementId = 0;
+  world.nextBandId = 0;
   world.settlementNames = new Set();
-  world.tensions = new Set();
+  world.relations = {};
+
+  // Assign archetypes: each real-civilization preset once (shuffled),
+  // any remaining tribes are fully random peoples.
+  const archetypeIds = Object.keys(ARCHETYPES);
+  shuffleInPlace(archetypeIds, rng.fork('archetypes'));
 
   const takenNames = new Set();
-  world.tribes = sites.map((site, idx) => ({
-    id: idx,
-    name: generateTribeName(rng, takenNames),
-    color: TRIBE_COLORS[idx % TRIBE_COLORS.length],
-    alive: true,
-  }));
+  world.tribes = sites.map((site, idx) => {
+    const archetype = idx < archetypeIds.length ? archetypeIds[idx] : 'random';
+    const traits = rollTraits(rng.fork('traits:' + idx),
+      archetype === 'random' ? null : archetype);
+    return {
+      id: idx,
+      name: generateTribeName(rng, takenNames),
+      color: TRIBE_COLORS[idx % TRIBE_COLORS.length],
+      alive: true,
+      archetype,
+      traits,
+      foundingTraits: { ...traits },
+      nudges: {},
+      progress: {
+        techs: new Set(['flint_knapping']),
+        pools: { tech: 0, art: 0, philosophy: 0 },
+        governance: 'band',
+        artStage: 0,
+        philStage: 0,
+        target: null,
+      },
+      resourceAccess: new Set(),
+      tradePartners: 0,
+      sedentaryYear: null,
+      peakPop: 0,
+      rangeCenter: { x: site.x, y: site.y },
+    };
+  });
 
+  // Each tribe arrives as a couple of wandering bands near its range.
   for (const tribe of world.tribes) {
-    const site = sites[tribe.id];
-    createSettlement(world, rng, site.x, site.y, rng.int(90, 160), tribe.id);
+    const c = tribe.rangeCenter;
+    const nBands = rng.int(2, 3);
+    for (let k = 0; k < nBands; k++) {
+      const bx = Math.max(4, Math.min(size - 5, c.x + rng.int(-6, 6)));
+      const by = Math.max(4, Math.min(size - 5, c.y + rng.int(-6, 6)));
+      createBand(world, bx, by, rng.int(25, 55), tribe.id);
+    }
   }
 
   world.events = [{
     year: 0,
-    text: `${world.tribes.length} tribes arrived on the island and made their first camps.`,
+    text: `${world.tribes.length} tribes arrived on the island as wandering bands of foragers.`,
   }];
 
   computeInfluence(world);
+  computeResourceAccess(world);
   return world.tribes;
 }
 
+// ---- js/relations.js ----
+// Inter-tribe relations: where traits meet. Each pair of tribes in
+// contact carries a small state machine — contact, trade, rivalry, war —
+// driven by both sides' dispositions and by what each side has that the
+// other lacks. See design/tribe-evolution.md §6.
+
+function relationKey(a, b) {
+  return a < b ? `${a}-${b}` : `${b}-${a}`;
+}
+
+function getRelation(world, a, b) {
+  return (world.relations || {})[relationKey(a, b)] || null;
+}
+
+// Contact begins when peoples actually meet: influence borders touch, or
+// nomadic bands wander near another tribe's people.
+function detectContacts(world, log) {
+  const { size } = world;
+  const owner = world.influenceOwner;
+  world.relations = world.relations || {};
+
+  const borderCount = new Map();
+  if (owner) {
+    for (let y = 1; y < size - 1; y++) {
+      for (let x = 1; x < size - 1; x++) {
+        const a = owner[y * size + x];
+        if (a < 0) continue;
+        for (const b of [owner[y * size + x + 1], owner[(y + 1) * size + x]]) {
+          if (b >= 0 && b !== a) {
+            const key = relationKey(a, b);
+            borderCount.set(key, (borderCount.get(key) || 0) + 1);
+          }
+        }
+      }
+    }
+  }
+
+  const near = (x1, y1, x2, y2, d) => {
+    const dx = x1 - x2;
+    const dy = y1 - y2;
+    return dx * dx + dy * dy <= d * d;
+  };
+
+  // Band proximity: to other bands and to settlements.
+  const bands = world.bands || [];
+  const pairsMet = new Set([...borderCount.keys()]);
+  for (let i = 0; i < bands.length; i++) {
+    for (let j = i + 1; j < bands.length; j++) {
+      if (bands[i].tribeId !== bands[j].tribeId &&
+          near(bands[i].x, bands[i].y, bands[j].x, bands[j].y, 9)) {
+        pairsMet.add(relationKey(bands[i].tribeId, bands[j].tribeId));
+      }
+    }
+    for (const s of world.settlements || []) {
+      if (s.tribeId !== bands[i].tribeId &&
+          near(bands[i].x, bands[i].y, s.x, s.y, 9)) {
+        pairsMet.add(relationKey(bands[i].tribeId, s.tribeId));
+      }
+    }
+  }
+
+  for (const key of pairsMet) {
+    if (!world.relations[key]) {
+      const [a, b] = key.split('-').map(Number);
+      const ta = world.tribes[a];
+      const tb = world.tribes[b];
+      if (!ta || !tb || !ta.alive || !tb.alive) continue;
+      world.relations[key] = {
+        stance: 'contact', familiarity: 0, grievances: 0, warYears: 0,
+      };
+      log(`${ta.name} and ${tb.name} met for the first time.`);
+    }
+  }
+}
+
+// The two appetites a pair of peoples can have for each other.
+function tradeDesire(world, a, b, rel) {
+  let d = 0.5 * (a.traits.mercantile + b.traits.mercantile)
+    + 0.25 * (1 - (a.traits.cohesion + b.traits.cohesion) / 2)
+    + 0.2 * (1 - (a.traits.dogmatism + b.traits.dogmatism) / 2)
+    + 0.15 * Math.min(1, rel.familiarity);
+  // Complementary resources — one side holds what the other needs.
+  for (const [x, y] of [[a, b], [b, a]]) {
+    const wants = ['tin', 'copper', 'iron'].some((r) =>
+      !x.resourceAccess.has(r) && y.resourceAccess.has(r));
+    if (wants) d += 0.15;
+  }
+  return d - 0.1 * rel.grievances;
+}
+
+function warDesire(world, a, b, rel) {
+  let d = 0.5 * (a.traits.aggression + b.traits.aggression)
+    + 0.3 * (a.traits.cohesion + b.traits.cohesion) / 2
+    + 0.12 * rel.grievances
+    - 0.25 * Math.min(1, rel.familiarity);
+  // Resource envy: a martial people locked out of the metals.
+  for (const [x, y] of [[a, b], [b, a]]) {
+    const envy = ['tin', 'copper', 'iron'].some((r) =>
+      !x.resourceAccess.has(r) && y.resourceAccess.has(r));
+    if (envy && computePosture(x.traits).military > 0.38) d += 0.2;
+  }
+  return d;
+}
+
+// Military strength for a raid/battle roll. Discipline helps organised
+// war (professional warriors); its absence fuels shock raiding.
+function militaryStrength(world, tribe, rng) {
+  const pop = totalTribePop(world, tribe);
+  const posture = computePosture(tribe.traits);
+  const t = tribe.progress.techs;
+  let techMult = 1;
+  if (t.has('bronze_working')) techMult *= 1.3;
+  if (t.has('iron_working')) techMult *= 1.35;
+  if (t.has('raiding')) techMult *= 1.15;
+  if (t.has('warriors')) techMult *= 1.25;
+  const style = t.has('warriors')
+    ? 0.7 + 0.6 * tribe.traits.discipline        // organised warfare
+    : 1 + 0.35 * (1 - tribe.traits.discipline);  // shock raiding
+  return Math.sqrt(pop) * (0.5 + posture.military) * techMult * style *
+    varianceRoll(rng, tribe.traits);
+}
+
+function defensiveBonus(tribe) {
+  return tribe.progress.techs.has('fortifications')
+    ? 1.2 + 0.3 * tribe.traits.discipline : 1;
+}
+
+// Yearly relations pass: stance transitions, trade effects, war damage,
+// conquest. Runs after influence + resource access are fresh.
+function updateRelations(world, rng, log) {
+  detectContacts(world, log);
+
+  for (const tribe of world.tribes) tribe.tradePartners = 0;
+
+  for (const [key, rel] of Object.entries(world.relations)) {
+    const [aId, bId] = key.split('-').map(Number);
+    const a = world.tribes[aId];
+    const b = world.tribes[bId];
+    if (!a || !b || !a.alive || !b.alive) continue;
+
+    const pairRng = rng.fork(`rel:${key}`);
+    rel.familiarity = Math.min(2, rel.familiarity +
+      (rel.stance === 'trade' ? 0.04 : rel.stance === 'war' ? 0.01 : 0.02));
+    rel.grievances = Math.max(0, rel.grievances - 0.02); // old wounds fade
+
+    const td = tradeDesire(world, a, b, rel);
+    const wd = warDesire(world, a, b, rel);
+
+    switch (rel.stance) {
+      case 'contact':
+        if (td > 0.75 && pairRng.random() < 0.25) {
+          rel.stance = 'trade';
+          log(`${a.name} and ${b.name} began to trade.`);
+        } else if (wd > 0.7 && pairRng.random() < 0.15) {
+          rel.stance = 'rivalry';
+          log(`Rivalry hardened between ${a.name} and ${b.name}.`);
+        }
+        break;
+
+      case 'trade':
+        if (wd > 0.95 && pairRng.random() < 0.1) {
+          rel.stance = 'rivalry';
+          rel.grievances += 1;
+          log(`Trade between ${a.name} and ${b.name} broke down amid disputes.`);
+        } else if (td < 0.45) {
+          rel.stance = 'contact';
+        }
+        break;
+
+      case 'rivalry':
+        if (wd > 0.85 && pairRng.random() < 0.12) {
+          rel.stance = 'war';
+          rel.warYears = 0;
+          log(`War broke out between ${a.name} and ${b.name}.`);
+        } else if (td > 0.85 && pairRng.random() < 0.1) {
+          rel.stance = 'trade';
+          log(`Old rivals ${a.name} and ${b.name} set enmity aside to trade.`);
+        }
+        break;
+
+      case 'war': {
+        rel.warYears++;
+        resolveWarYear(world, a, b, rel, pairRng, log);
+        if (!a.alive || !b.alive) break;
+        const exhaustion = 0.08 + 0.05 * rel.warYears;
+        if (pairRng.random() < exhaustion) {
+          rel.stance = 'rivalry';
+          log(`${a.name} and ${b.name} made an exhausted peace.`);
+        }
+        break;
+      }
+    }
+
+    if (rel.stance === 'trade') {
+      a.tradePartners++;
+      b.tradePartners++;
+      // Sustained exchange erodes closed-mindedness.
+      nudgeTrait(a, 'dogmatism', -0.002);
+      nudgeTrait(b, 'dogmatism', -0.002);
+    }
+    if (rel.stance === 'war') {
+      for (const t of [a, b]) {
+        nudgeTrait(t, 'aggression', 0.004);
+        nudgeTrait(t, 'cohesion', 0.004);
+      }
+    }
+  }
+}
+
+function resolveWarYear(world, a, b, rel, rng, log) {
+  const sa = militaryStrength(world, a, rng);
+  const sb = militaryStrength(world, b, rng);
+  const [winner, loser, sw, sl] = sa >= sb ? [a, b, sa, sb] : [b, a, sb, sa];
+  const ratio = Math.min(3, sw / Math.max(0.01, sl * defensiveBonus(loser)));
+
+  // Raid damage falls on the loser's people.
+  const lossRate = 0.01 * ratio;
+  damageTribe(world, loser, lossRate, rng);
+  rel.grievances = Math.min(5, rel.grievances + 0.5);
+
+  if (rel.warYears === 1 || rng.random() < 0.25) {
+    log(`${winner.name} raided ${loser.name} and carried off spoils.`);
+  }
+
+  // Conquest: a sustained, decisive edge flips a settlement's allegiance
+  // — the place and its people endure; only the banner changes.
+  const loserSettlements = tribeSettlements(world, loser.id);
+  if (rel.warYears >= 3 && ratio > 1.6 &&
+      winner.progress.techs.has('warriors') && loserSettlements.length > 0 &&
+      rng.random() < 0.35) {
+    const centre = tribeCentroid(world, winner);
+    let target = loserSettlements[0];
+    let bestD = Infinity;
+    for (const s of loserSettlements) {
+      const d = (s.x - centre.x) ** 2 + (s.y - centre.y) ** 2;
+      if (d < bestD) { bestD = d; target = s; }
+    }
+    target.tribeId = winner.id;
+    target.assimilatingUntil = world.year + Math.round(20 + 40 * loser.traits.cohesion);
+    log(`${winner.name} conquered ${target.name}; its people now answer to new masters.`);
+    rel.grievances = Math.min(5, rel.grievances + 2);
+    checkTribeDeath(world, loser, log);
+  }
+}
+
+function damageTribe(world, tribe, rate, rng) {
+  for (const s of tribeSettlements(world, tribe.id)) {
+    s.pop *= 1 - rate * rng.range(0.6, 1.4);
+  }
+  for (const band of world.bands || []) {
+    if (band.tribeId === tribe.id) band.pop *= 1 - rate * rng.range(0.6, 1.4);
+  }
+}
+
+function tribeCentroid(world, tribe) {
+  let x = 0;
+  let y = 0;
+  let n = 0;
+  for (const s of tribeSettlements(world, tribe.id)) { x += s.x; y += s.y; n++; }
+  for (const band of world.bands || []) {
+    if (band.tribeId === tribe.id) { x += band.x; y += band.y; n++; }
+  }
+  return n ? { x: x / n, y: y / n } : tribe.rangeCenter;
+}
+
+function totalTribePop(world, tribe) {
+  let sum = tribePopulation(world, tribe);
+  for (const band of world.bands || []) {
+    if (band.tribeId === tribe.id) sum += band.pop;
+  }
+  return sum;
+}
+
+function checkTribeDeath(world, tribe, log) {
+  if (!tribe.alive) return;
+  const hasSettlement = world.settlements.some((s) => s.tribeId === tribe.id);
+  const hasBand = (world.bands || []).some((b) => b.tribeId === tribe.id);
+  if (!hasSettlement && !hasBand) {
+    tribe.alive = false;
+    log(`${tribe.name} died out.`);
+  }
+}
+
 // ---- js/sim.js ----
-// The simulation: yearly ticks of tribal life. Each settlement gathers
-// food from the land around it; population grows toward the local carrying
-// capacity, large settlements bud off daughter camps, and each tribe's
-// influence spreads across the landscape as it grows.
+// The simulation: yearly ticks of a people's life. Nomadic bands roam and
+// forage; agriculture roots tribes into settlements; knowledge, relations
+// and governance evolve on top. Orchestration lives in simulateYear.
 
-// How many people one tile can feed for a year (very roughly), given its
-// terrain and any food resource on it. Cached per world.
+// --- Food: wild forage vs farmed ground -----------------------------------
+// forageValue: what the wild land yields to hunter-gatherers.
+// farmValue: what the same tile yields under cultivation (persons/tile —
+// a tile is ~16 km², so 40 persons/tile ≈ 2.5 persons per km²).
+
 function computeFoodValues(world) {
-  if (world.foodValue) return world.foodValue;
-  const { size, terrain, resources } = world;
-  const fv = new Float32Array(size * size);
+  if (world.forageValue) return;
+  const { size, terrain, resources, moisture } = world;
+  const forage = new Float32Array(size * size);
+  const farm = new Float32Array(size * size);
 
-  const TERRAIN_FOOD = {
-    [TERRAIN.GRASSLAND]: 1.2,
-    [TERRAIN.PLAINS]: 1.0,
-    [TERRAIN.FOREST]: 1.4,   // foraging and hunting
-    [TERRAIN.COAST]: 0.8,
-    [TERRAIN.MARSH]: 0.6,    // wildfowl, eels
-    [TERRAIN.HILLS]: 0.5,
-    [TERRAIN.RIVER]: 2.0,
-    [TERRAIN.LAKE]: 1.5,
-    [TERRAIN.MOUNTAINS]: 0.1,
+  const FORAGE = {
+    [TERRAIN.GRASSLAND]: 0.8,
+    [TERRAIN.PLAINS]: 0.6,
+    [TERRAIN.FOREST]: 1.2,
+    [TERRAIN.COAST]: 0.6,
+    [TERRAIN.MARSH]: 0.5,
+    [TERRAIN.HILLS]: 0.4,
+    [TERRAIN.RIVER]: 1.6,
+    [TERRAIN.LAKE]: 1.2,
+    [TERRAIN.MOUNTAINS]: 0.08,
+  };
+  const FARM = {
+    [TERRAIN.GRASSLAND]: 45,
+    [TERRAIN.PLAINS]: 35,
+    [TERRAIN.FOREST]: 12,   // clearings
+    [TERRAIN.MARSH]: 8,
+    [TERRAIN.COAST]: 10,
+    [TERRAIN.HILLS]: 8,
   };
 
   for (let i = 0; i < size * size; i++) {
-    let v = TERRAIN_FOOD[terrain[i]] || 0;
+    let f = FORAGE[terrain[i]] || 0;
+    let a = FARM[terrain[i]] || 0;
     const res = resources[i];
     if (res) {
-      if (res.id === 'fertile') v += 4;
-      else if (res.id === 'fish') v += 3;
-      else if (res.id === 'game') v += 2.5;
-      else if (res.id === 'timber') v += 0.5;
+      if (res.id === 'fertile') { f += 1.5; a += 120; }
+      else if (res.id === 'fish') f += 2.5;
+      else if (res.id === 'game') f += 2.0;
+      else if (res.id === 'timber') f += 0.4;
     }
-    fv[i] = v;
+    if (a > 0 && moisture[i] < 0.3) a *= 0.4; // too dry to farm well
+    forage[i] = f;
+    farm[i] = a;
   }
-  world.foodValue = fv;
-  return fv;
+  world.forageValue = forage;
+  world.farmValue = farm;
+}
+
+function sumInRadius(world, field, cx, cy, r) {
+  const { size } = world;
+  const ri = Math.ceil(r);
+  let sum = 0;
+  for (let dy = -ri; dy <= ri; dy++) {
+    for (let dx = -ri; dx <= ri; dx++) {
+      if (dx * dx + dy * dy > r * r) continue;
+      const x = cx + dx;
+      const y = cy + dy;
+      if (x < 0 || y < 0 || x >= size || y >= size) continue;
+      sum += field[y * size + x];
+    }
+  }
+  return sum;
+}
+
+function nearRiver(world, cx, cy, r) {
+  const { size, terrain } = world;
+  for (let dy = -r; dy <= r; dy++) {
+    for (let dx = -r; dx <= r; dx++) {
+      const x = cx + dx;
+      const y = cy + dy;
+      if (x < 0 || y < 0 || x >= size || y >= size) continue;
+      const t = terrain[y * size + x];
+      if (t === TERRAIN.RIVER || t === TERRAIN.LAKE) return true;
+    }
+  }
+  return false;
+}
+
+// --- Carrying capacities ---------------------------------------------------
+
+// A band lives off the wild land within a day or two's walk.
+function bandCapacity(world, band) {
+  computeFoodValues(world);
+  return Math.max(15, sumInRadius(world, world.forageValue, band.x, band.y, 4) * 0.6);
 }
 
 function gatherRadius(pop) {
   return 3 + Math.sqrt(Math.max(0, pop)) / 2.5;
 }
 
-// Carrying capacity of the land a settlement can reach.
-function settlementCapacity(world, s) {
-  const fv = computeFoodValues(world);
+// A settlement's capacity: wild forage plus, with the right technologies,
+// the farmed yield of the surrounding land.
+function settlementCapacity(world, s, tribe) {
+  computeFoodValues(world);
+  const r = Math.min(9, gatherRadius(s.pop));
+  let cap = sumInRadius(world, world.forageValue, s.x, s.y, r) * 0.5;
+
+  const techs = tribe.progress.techs;
+  if (techs.has('agriculture') && !s.proto) {
+    let farmed = sumInRadius(world, world.farmValue, s.x, s.y, r);
+    if (techs.has('irrigation') && nearRiver(world, s.x, s.y, 2)) farmed *= 1.5;
+    cap += farmed;
+  }
+  if (techs.has('fishing')) cap *= 1.15;
+  if (techs.has('husbandry')) cap *= 1.12;
+  if (techs.has('pottery')) cap *= 1.08;   // storage
+  if (techs.has('masonry')) cap *= 1.1;    // denser building
+  if (s.proto) cap = Math.min(cap, 400);   // a fishing village, not a farm town
+  return Math.max(20, cap);
+}
+
+// --- Governance -------------------------------------------------------------
+
+const GOVERNANCE_LABELS = {
+  band: 'Band society',
+  chiefdom: 'Chiefdom',
+  theocracy: 'Theocracy',
+  kingship: 'Kingship',
+  council: 'Council rule',
+  merchant: 'Merchant oligarchy',
+};
+
+function governanceStability(tribe) {
+  const g = tribe.progress.governance;
+  const d = tribe.traits.discipline;
+  const base = { band: 1.0, chiefdom: 1.01, theocracy: 1.03, kingship: 1.03, council: 1.03, merchant: 1.03 }[g] || 1;
+  return base * (0.97 + 0.06 * d);
+}
+
+function maxSettlements(tribe) {
+  const g = tribe.progress.governance;
+  const d = tribe.traits.discipline;
+  const base = { band: 1, chiefdom: 3, theocracy: 6, kingship: 7, council: 6, merchant: 7 }[g] || 1;
+  return Math.round(base + 2 * d);
+}
+
+function updateGovernance(world, tribe, pop, rng, log) {
+  const p = tribe.progress;
+  tribe.peakPop = Math.max(tribe.peakPop, pop);
+
+  if (p.governance === 'band' && tribeSettlements(world, tribe.id).length > 0) {
+    p.governance = 'chiefdom';
+    log(`${tribe.name} came under the rule of chiefs.`);
+    return;
+  }
+
+  if (p.governance === 'chiefdom' && pop > 2500 && p.techs.has('law')) {
+    const t = tribe.traits;
+    const options = [
+      ['theocracy', t.cohesion + t.dogmatism],
+      ['kingship', t.aggression + t.cohesion],
+      ['council', t.contemplation + (1 - t.dogmatism)],
+      ['merchant', t.mercantile + (tribe.tradePartners > 0 ? 0.5 : 0)],
+    ];
+    options.sort((a, b) => b[1] - a[1]);
+    p.governance = options[0][0];
+    log(`${tribe.name} established ${GOVERNANCE_LABELS[p.governance].toLowerCase()}.`);
+    return;
+  }
+
+  // Passionate polities wobble: succession crises and factional strife.
+  if (p.governance !== 'band' && p.governance !== 'chiefdom') {
+    if (rng.random() < 0.01 * (1 - tribe.traits.discipline) * 2) {
+      damageTribe(world, tribe, 0.02, rng);
+      nudgeTrait(tribe, 'cohesion', -0.01);
+      log(`A succession crisis convulsed ${tribe.name}.`);
+    }
+  }
+
+  // Collapse: losing half the people at the peak breaks complex rule.
+  if (p.governance !== 'band' && p.governance !== 'chiefdom' &&
+      pop < tribe.peakPop * 0.5) {
+    p.governance = 'chiefdom';
+    tribe.peakPop = pop;
+    log(`Order broke down; ${tribe.name} fell back under rival chiefs.`);
+  }
+}
+
+// --- Demography: bands -------------------------------------------------------
+
+function updateBands(world, tribe, rng, seasonFactor, log) {
   const { size } = world;
-  const r = gatherRadius(s.pop);
-  const ri = Math.ceil(r);
-  let cap = 0;
-  for (let dy = -ri; dy <= ri; dy++) {
-    for (let dx = -ri; dx <= ri; dx++) {
-      if (dx * dx + dy * dy > r * r) continue;
-      const nx = s.x + dx;
-      const ny = s.y + dy;
-      if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
-      cap += fv[ny * size + nx];
+  const bands = tribeBands(world, tribe.id);
+
+  for (const band of bands) {
+    // Roam: every few years, drift toward better forage within the range.
+    if (world.year - band.lastMove >= 3 && rng.random() < 0.5) {
+      let best = null;
+      let bestScore = -Infinity;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const nx = Math.max(4, Math.min(size - 5, band.x + rng.int(-5, 5)));
+        const ny = Math.max(4, Math.min(size - 5, band.y + rng.int(-5, 5)));
+        if (isSea(world.terrain[ny * size + nx])) continue;
+        let score = sumInRadius(world, world.forageValue, nx, ny, 4);
+        // A gentle pull keeps the tribe's bands loosely together.
+        const dx = nx - tribe.rangeCenter.x;
+        const dy = ny - tribe.rangeCenter.y;
+        score -= Math.sqrt(dx * dx + dy * dy) * 0.4;
+        if (score > bestScore) { bestScore = score; best = { x: nx, y: ny }; }
+      }
+      if (best) {
+        band.x = best.x;
+        band.y = best.y;
+        band.lastMove = world.year;
+      }
+    }
+
+    // Forager demography: very slow growth toward a low wild ceiling —
+    // realistic hunter-gatherer rates (~0.1-0.3 %/yr).
+    const cap = bandCapacity(world, band) * seasonFactor;
+    const r = 0.0025 * varianceRoll(rng, tribe.traits);
+    band.pop = Math.max(0, band.pop + r * band.pop * (1 - band.pop / cap));
+
+    if (band.pop > 100) {
+      const migrants = band.pop * 0.45;
+      band.pop -= migrants;
+      const nx = Math.max(4, Math.min(size - 5, band.x + rng.int(-6, 6)));
+      const ny = Math.max(4, Math.min(size - 5, band.y + rng.int(-6, 6)));
+      createBand(world, nx, ny, migrants, tribe.id);
     }
   }
-  return cap;
+
+  // Merge or lose failing bands.
+  const survivors = [];
+  for (const band of tribeBands(world, tribe.id)) {
+    if (band.pop >= 12) { survivors.push(band); continue; }
+    const nearest = survivors[0] || null;
+    if (nearest) nearest.pop += band.pop;
+    world.bands = world.bands.filter((b) => b !== band);
+  }
 }
 
-function simulateYears(world, years = 10) {
-  if (!world.tribes) foundTribes(world);
-  for (let k = 0; k < years; k++) {
-    simulateYear(world);
-  }
-  computeInfluence(world);
-}
+// --- Demography: settlements --------------------------------------------------
 
-function simulateYear(world) {
-  world.year++;
-  const year = world.year;
-  const rng = new RNG(world.seed + ':year:' + year);
-  const log = (text) => world.events.push({ year, text });
+function updateSettlements(world, tribe, rng, seasonFactor, log) {
+  const settlements = tribeSettlements(world, tribe.id);
+  const stability = governanceStability(tribe);
+  const prosperity = tribe.tradePartners > 0 ? 1.15 : 1;
 
-  // Island-wide season quality for the year.
-  const seasonRoll = rng.random();
-  let seasonFactor = 1;
-  if (seasonRoll < 0.15) {
-    seasonFactor = 0.75;
-    log('A harsh winter gripped the island; food ran short everywhere.');
-  } else if (seasonRoll > 0.85) {
-    seasonFactor = 1.2;
-    log('A mild year with rich harvests of forage and game.');
+  for (const s of settlements) {
+    const cap = Math.max(20, settlementCapacity(world, s, tribe) * seasonFactor);
+    let r = 0.008 * stability * prosperity * varianceRoll(rng, tribe.traits);
+    if (s.assimilatingUntil && world.year < s.assimilatingUntil) r *= 0.4;
+    s.pop = Math.max(0, s.pop + r * s.pop * (1 - s.pop / cap));
   }
 
-  const GROWTH_RATE = 0.06;
-
-  // Places live their year: each settlement feeds itself from the land
-  // around it, whatever tribe it answers to.
-  for (const s of world.settlements) {
-    const cap = Math.max(10, settlementCapacity(world, s) * seasonFactor);
-    // Logistic growth toward capacity; shrinks when over capacity.
-    const growth = GROWTH_RATE * s.pop * (1 - s.pop / cap);
-    s.pop = Math.max(0, s.pop + growth + rng.range(-2, 2));
+  // Daughter settlements: crowded places seed new ones, within what the
+  // tribe's governance can coordinate.
+  if (settlements.length < maxSettlements(tribe)) {
+    for (const s of settlements) {
+      const cap = settlementCapacity(world, s, tribe);
+      if (s.pop < 1200 || s.pop < cap * 0.6) continue;
+      const site = findDaughterSite(world, s, rng);
+      if (!site) continue;
+      const migrants = Math.round(s.pop * 0.3);
+      s.pop -= migrants;
+      const daughter = createSettlement(world, rng, site.x, site.y, migrants, tribe.id);
+      log(`${tribe.name} founded ${daughter.name} as ${s.name} grew crowded.`);
+      break;
+    }
   }
 
-  // Founding daughter settlements: a crowded settlement sends part of its
-  // people to the best nearby unclaimed ground. The new place keeps the
-  // parent's allegiance. At most one founding per tribe per year.
-  const SPLIT_POP = 220;
-  const foundedThisYear = new Set();
-  for (const s of [...world.settlements]) {
-    if (s.pop < SPLIT_POP || foundedThisYear.has(s.tribeId)) continue;
-    const site = findDaughterSite(world, s, rng);
-    if (!site) continue;
-    const migrants = Math.round(s.pop * 0.4);
-    s.pop -= migrants;
-    const daughter = createSettlement(world, rng, site.x, site.y, migrants, s.tribeId);
-    foundedThisYear.add(s.tribeId);
-    const tribe = world.tribes[s.tribeId];
-    log(`${tribe.name} founded ${daughter.name} as ${s.name} grew crowded.`);
-  }
-
-  // Abandon failed settlements.
-  world.settlements = world.settlements.filter((s) => {
-    if (s.pop >= 12) return true;
+  // Abandonment.
+  for (const s of [...tribeSettlements(world, tribe.id)]) {
+    if (s.pop >= 15) continue;
+    world.settlements = world.settlements.filter((x) => x !== s);
     log(`${s.name} was abandoned as its people dwindled.`);
-    return false;
-  });
-
-  // A tribe with no settlements left has died out as a people.
-  for (const tribe of world.tribes) {
-    if (tribe.alive && tribeSettlements(world, tribe.id).length === 0) {
-      tribe.alive = false;
-      log(`${tribe.name} died out.`);
-    }
   }
-
-  computeInfluence(world);
-  detectTensions(world, log);
 }
 
-// Pick a spot 8-16 tiles from the parent settlement with the best
-// settlement score, away from every existing settlement.
 function findDaughterSite(world, parent, rng) {
   const { size } = world;
   const MIN_DIST = 7;
   let best = null;
-  let bestScore = 4; // don't settle marginal ground
+  let bestScore = 4;
 
   for (let attempt = 0; attempt < 60; attempt++) {
     const angle = rng.range(0, Math.PI * 2);
@@ -1296,10 +2212,117 @@ function findDaughterSite(world, parent, rng) {
   return best;
 }
 
-// Influence: each settlement projects strength that fades with distance;
-// every land tile is credited to whichever tribe is strongest there.
-// world.influenceOwner: Int16Array of tribe id (-1 = unclaimed)
-// world.influenceStrength: Float32Array 0..1 for display alpha
+// --- The year -------------------------------------------------------------
+
+function simulateYears(world, years = 10) {
+  if (!world.tribes) foundTribes(world);
+  for (let k = 0; k < years; k++) {
+    simulateYear(world);
+  }
+}
+
+function simulateYear(world) {
+  world.year++;
+  const year = world.year;
+  const rng = new RNG(world.seed + ':year:' + year);
+  const log = (text) => world.events.push({ year, text });
+
+  // Island-wide season quality for the year.
+  const seasonRoll = rng.random();
+  let harsh = false;
+  let seasonFactor = 1;
+  if (seasonRoll < 0.15) {
+    harsh = true;
+    log('A harsh winter gripped the island; food ran short everywhere.');
+  } else if (seasonRoll > 0.85) {
+    seasonFactor = 1.2;
+    log('A mild year with rich harvests of forage and game.');
+  }
+
+  for (const tribe of world.tribes) {
+    if (!tribe.alive) continue;
+    const tribeRng = rng.fork('tribe:' + tribe.id);
+
+    // Harsh winters hit harder without stores; pottery softens the blow.
+    let tribeSeason = seasonFactor;
+    if (harsh) {
+      tribeSeason = tribe.progress.techs.has('pottery') ? 0.85 : 0.75;
+      nudgeTrait(tribe, 'cohesion', 0.002); // hardship binds
+    }
+
+    const pop = totalTribePop(world, tribe);
+
+    // Knowledge: pools, stages, discovery.
+    const events = updateKnowledge(world, tribe, pop, tribeRng.fork('knowledge'), tribeSeason);
+    for (const e of events) log(e);
+
+    // Agriculture ends the wandering.
+    if (tribe.progress.techs.has('agriculture') && tribeIsNomadic(world, tribe)) {
+      const home = settleTribe(world, tribe, tribeRng.fork('settle'));
+      if (home) log(`${tribe.name} settled at ${home.name} — their wandering ended.`);
+    }
+
+    // Sedentary foragers: an exceptional fishing ground can hold a
+    // proto-village before farming.
+    if (tribeIsNomadic(world, tribe) && tribe.progress.techs.has('fishing') &&
+        !tribe.triedProtoVillage) {
+      const bands = tribeBands(world, tribe.id);
+      const rich = bands.find((b) =>
+        countResourceNear(world, b.x, b.y, 'fish', 3) >= 4);
+      if (rich) {
+        tribe.triedProtoVillage = true;
+        const home = settleTribe(world, tribe, tribeRng.fork('proto'), { proto: true });
+        if (home) log(`${tribe.name} settled at ${home.name}, living from the rich waters.`);
+      }
+    }
+
+    // Demography.
+    if (tribeIsNomadic(world, tribe)) {
+      updateBands(world, tribe, tribeRng.fork('bands'), tribeSeason, log);
+    } else {
+      updateSettlements(world, tribe, tribeRng.fork('towns'), tribeSeason, log);
+    }
+
+    // Society.
+    updateGovernance(world, tribe, totalTribePop(world, tribe), tribeRng.fork('gov'), log);
+    driftTraits(tribe, tribeRng.fork('drift'));
+
+    checkTribeDeath(world, tribe, log);
+  }
+
+  // The map layer everything else reads.
+  computeInfluence(world);
+  computeResourceAccess(world);
+
+  // Where peoples meet: contact, trade, rivalry, war, conquest.
+  updateRelations(world, rng.fork('relations'), log);
+
+  // Ideas travel with contact.
+  for (const e of diffuseTechs(world, rng.fork('diffusion'))) log(e);
+
+  for (const tribe of world.tribes) checkTribeDeath(world, tribe, log);
+}
+
+function countResourceNear(world, cx, cy, resourceId, r) {
+  const { size } = world;
+  let n = 0;
+  for (let dy = -r; dy <= r; dy++) {
+    for (let dx = -r; dx <= r; dx++) {
+      const x = cx + dx;
+      const y = cy + dy;
+      if (x < 0 || y < 0 || x >= size || y >= size) continue;
+      const res = world.resources[y * size + x];
+      if (res && res.id === resourceId) n++;
+    }
+  }
+  return n;
+}
+
+// --- Influence ---------------------------------------------------------------
+// Influence flows from PLACES (settlements) and PRESENCES (bands), but
+// accrues to the SOCIAL entity — the tribe they answer to. Bands project
+// only a faint, drifting presence; settled peoples hold ground.
+
 function computeInfluence(world) {
   const { size, terrain } = world;
   const owner = new Int16Array(size * size).fill(-1);
@@ -1310,31 +2333,33 @@ function computeInfluence(world) {
     return;
   }
 
-  // Accumulate per-tribe strength only where settlements reach: iterate
-  // each settlement's footprint instead of every tile x every settlement.
-  // Influence flows from PLACES (settlements) but accrues to the SOCIAL
-  // entity (the tribe they give allegiance to).
   const tribeStrength = new Float32Array(size * size); // reused per tribe
 
   for (const tribe of world.tribes) {
     if (!tribe.alive) continue;
     tribeStrength.fill(0);
 
-    for (const s of tribeSettlements(world, tribe.id)) {
-      const reach = gatherRadius(s.pop) * 2.2;
+    const stamp = (x, y, pop, reach, weight) => {
       const ri = Math.ceil(reach);
       for (let dy = -ri; dy <= ri; dy++) {
         for (let dx = -ri; dx <= ri; dx++) {
-          const nx = s.x + dx;
-          const ny = s.y + dy;
+          const nx = x + dx;
+          const ny = y + dy;
           if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
           const d = Math.sqrt(dx * dx + dy * dy);
           if (d > reach) continue;
           const ni = ny * size + nx;
           if (isSea(terrain[ni])) continue;
-          tribeStrength[ni] += s.pop * (1 - d / reach);
+          tribeStrength[ni] += pop * weight * (1 - d / reach);
         }
       }
+    };
+
+    for (const s of tribeSettlements(world, tribe.id)) {
+      stamp(s.x, s.y, s.pop, gatherRadius(s.pop) * 2.2, 1);
+    }
+    for (const band of tribeBands(world, tribe.id)) {
+      stamp(band.x, band.y, band.pop, 6, 0.4);
     }
 
     for (let i = 0; i < size * size; i++) {
@@ -1346,17 +2371,17 @@ function computeInfluence(world) {
     }
   }
 
-  // Normalise strength into a display alpha.
+  // Normalise strength into a display alpha. Log scale: settlements grow
+  // to thousands, bands stay at dozens, and both should read on the map.
   for (let i = 0; i < size * size; i++) {
     if (owner[i] >= 0) {
-      strength[i] = Math.min(1, strength[i] / 120);
+      strength[i] = Math.min(1, Math.log10(1 + strength[i]) / 3.2);
     }
   }
 
   world.influenceOwner = owner;
   world.influenceStrength = strength;
 
-  // Territory sizes for the stats panel.
   for (const tribe of world.tribes) tribe.territoryTiles = 0;
   for (let i = 0; i < size * size; i++) {
     if (owner[i] >= 0) {
@@ -1365,42 +2390,6 @@ function computeInfluence(world) {
     }
   }
 }
-
-// Where two tribes press against each other, note the tension (once per
-// pair) — the seed of future conflict and trade mechanics.
-function detectTensions(world, log) {
-  const { size } = world;
-  const owner = world.influenceOwner;
-  const contested = new Map(); // "a-b" -> count of border tiles
-
-  for (let y = 1; y < size - 1; y++) {
-    for (let x = 1; x < size - 1; x++) {
-      const a = owner[y * size + x];
-      if (a < 0) continue;
-      const b1 = owner[y * size + x + 1];
-      const b2 = owner[(y + 1) * size + x];
-      for (const b of [b1, b2]) {
-        if (b >= 0 && b !== a) {
-          const key = a < b ? `${a}-${b}` : `${b}-${a}`;
-          contested.set(key, (contested.get(key) || 0) + 1);
-        }
-      }
-    }
-  }
-
-  for (const [key, count] of contested) {
-    if (count >= 25 && !world.tensions.has(key)) {
-      world.tensions.add(key);
-      const [a, b] = key.split('-').map(Number);
-      const ta = world.tribes[a];
-      const tb = world.tribes[b];
-      if (ta && tb && ta.alive && tb.alive) {
-        log(`${ta.name} and ${tb.name} now share a border; there is tension between them.`);
-      }
-    }
-  }
-}
-
 // ---- js/render.js ----
 // Canvas rendering. The world's tiles are painted once into an offscreen
 // base layer at native resolution; the visible canvas then shows a
@@ -1608,8 +2597,9 @@ function buildBaseLayer(world, view) {
         g = g + (lum - g) * mix;
         b = b + (lum - b) * mix;
         r *= 0.7; g *= 0.7; b *= 0.7;
-      } else if (view === 'communities') {
-        // Muted satellite base tinted by whichever tribe holds the tile.
+      } else if (view === 'communities' || view === 'development') {
+        // Muted satellite base tinted by whichever tribe holds the tile —
+        // tribe colour for Communities, era colour for Development.
         [r, g, b] = satelliteColor(world, x, y, i);
         const lum = 0.3 * r + 0.59 * g + 0.11 * b;
         const mix = sea ? 0.4 : 0.65;
@@ -1618,12 +2608,20 @@ function buildBaseLayer(world, view) {
         b = (b + (lum - b) * mix) * 0.8;
 
         const ownerId = world.influenceOwner ? world.influenceOwner[i] : -1;
-        if (ownerId >= 0 && tribeRgb[ownerId]) {
-          const a = 0.2 + world.influenceStrength[i] * 0.45;
-          const [tr, tg, tb] = tribeRgb[ownerId];
-          r = r * (1 - a) + tr * a;
-          g = g * (1 - a) + tg * a;
-          b = b * (1 - a) + tb * a;
+        if (ownerId >= 0 && world.tribes && world.tribes[ownerId]) {
+          let tint = null;
+          if (view === 'communities') {
+            tint = tribeRgb[ownerId];
+          } else {
+            const era = tribeEra(world.tribes[ownerId]);
+            tint = hexToRgb(ERA_COLORS[era]);
+          }
+          if (tint) {
+            const a = 0.2 + world.influenceStrength[i] * 0.45;
+            r = r * (1 - a) + tint[0] * a;
+            g = g * (1 - a) + tint[1] * a;
+            b = b * (1 - a) + tint[2] * a;
+          }
         }
       } else {
         // satellite
@@ -1709,13 +2707,16 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
     }
   }
 
-  // Settlements (places) are drawn on the satellite and communities views,
-  // coloured by the tribe they give allegiance to. Marker size scales with
-  // population, and grows gently with zoom rather than tile-for-tile.
-  if ((view === 'satellite' || view === 'communities') && world.settlements) {
+  // Settlements (places) and bands (nomadic presences) are drawn on the
+  // satellite, communities and development views, coloured by the tribe
+  // they answer to. Settled markers are solid and scale with population;
+  // bands are small open rings — people passing through, not places.
+  const peopleView = view === 'satellite' || view === 'communities' || view === 'development';
+  if (peopleView && (world.settlements || world.bands)) {
     const markerScale = Math.sqrt(camera.zoom);
+    const markerRadius = (pop) => (2.5 + Math.sqrt(pop) / 5) * markerScale;
 
-    for (const s of world.settlements) {
+    for (const s of world.settlements || []) {
       const tribe = world.tribes[s.tribeId];
       if (!tribe || !tribe.alive || !visible(s.x, s.y)) continue;
       ctx.fillStyle = tribe.color;
@@ -1723,8 +2724,18 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
       ctx.lineWidth = 1.4;
       ctx.beginPath();
       ctx.arc(toScreenX(s.x), toScreenY(s.y),
-        (2.5 + Math.sqrt(s.pop) / 5) * markerScale, 0, Math.PI * 2);
+        Math.min(14 * markerScale, markerRadius(s.pop)), 0, Math.PI * 2);
       ctx.fill();
+      ctx.stroke();
+    }
+
+    for (const band of world.bands || []) {
+      const tribe = world.tribes[band.tribeId];
+      if (!tribe || !tribe.alive || !visible(band.x, band.y)) continue;
+      ctx.strokeStyle = tribe.color;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(toScreenX(band.x), toScreenY(band.y), 2.2 * markerScale, 0, Math.PI * 2);
       ctx.stroke();
     }
 
@@ -1739,13 +2750,22 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
       ctx.fillText(text, screenX, screenY);
     };
 
-    if (view === 'communities') {
+    if (view === 'communities' || view === 'development') {
       for (const tribe of world.tribes) {
         if (!tribe.alive) continue;
-        const chief = tribeChiefSettlement(world, tribe);
-        if (!chief || !visible(chief.x, chief.y)) continue;
-        const radius = (2.5 + Math.sqrt(chief.pop) / 5) * markerScale;
-        label(tribe.name, toScreenX(chief.x), toScreenY(chief.y) - radius - 5,
+        // Settled peoples are labelled at their chief settlement; nomads
+        // at their largest band.
+        let anchor = tribeChiefSettlement(world, tribe);
+        if (!anchor) {
+          for (const band of world.bands || []) {
+            if (band.tribeId === tribe.id && (!anchor || band.pop > anchor.pop)) {
+              anchor = band;
+            }
+          }
+        }
+        if (!anchor || !visible(anchor.x, anchor.y)) continue;
+        const radius = markerRadius(anchor.pop);
+        label(tribe.name, toScreenX(anchor.x), toScreenY(anchor.y) - radius - 5,
           'bold 12px system-ui, sans-serif');
       }
     }
@@ -1753,10 +2773,10 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
     // Zoomed in far enough to read the map in detail: name the places
     // themselves, which is the point of having settlements as entities.
     if (camera.zoom >= 2.5) {
-      for (const s of world.settlements) {
+      for (const s of world.settlements || []) {
         const tribe = world.tribes[s.tribeId];
         if (!tribe || !tribe.alive || !visible(s.x, s.y)) continue;
-        const radius = (2.5 + Math.sqrt(s.pop) / 5) * markerScale;
+        const radius = Math.min(14 * markerScale, markerRadius(s.pop));
         label(s.name, toScreenX(s.x), toScreenY(s.y) + radius + 12,
           '11px system-ui, sans-serif');
       }
@@ -1788,8 +2808,18 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
   const zoomResetBtn = document.getElementById('zoom-reset-btn');
   const zoomLevelEl = document.getElementById('zoom-level');
 
+  const tribeInspector = document.getElementById('tribe-inspector');
+
   let world = null;
   let camera = createCamera();
+  let selectedTribeId = null;
+
+  function formatPop(n) {
+    n = Math.round(n);
+    if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+    if (n >= 10000) return (n / 1000).toFixed(1) + 'k';
+    return n.toLocaleString();
+  }
 
   function generate(seed) {
     const t0 = performance.now();
@@ -1798,7 +2828,10 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
     seedInput.value = seed;
     simulateBtn.textContent = 'Found tribes & simulate 10 years';
     tribesSection.style.display = 'none';
-    if (viewSelect.value === 'communities') viewSelect.value = 'satellite';
+    selectedTribeId = null;
+    if (viewSelect.value === 'communities' || viewSelect.value === 'development') {
+      viewSelect.value = 'satellite';
+    }
     camera = createCamera();
     refreshView();
     renderStats(ms);
@@ -1818,23 +2851,86 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
   }
 
   function renderTribes() {
-    const kmPerTile = world.kmPerTile;
     tribesPanel.innerHTML = world.tribes
       .slice()
-      .sort((a, b) => tribePopulation(world, b) - tribePopulation(world, a))
+      .sort((a, b) => totalTribePop(world, b) - totalTribePop(world, a))
       .map((t) => {
-        const pop = Math.round(tribePopulation(world, t));
-        const camps = tribeSettlements(world, t.id).length;
-        const territory = ((t.territoryTiles || 0) * kmPerTile * kmPerTile).toLocaleString();
+        const pop = totalTribePop(world, t);
+        const posture = computePosture(t.traits);
+        const nomadic = tribeIsNomadic(world, t);
+        const places = nomadic
+          ? `${tribeBands(world, t.id).length} bands`
+          : `${tribeSettlements(world, t.id).length} settlement${tribeSettlements(world, t.id).length > 1 ? 's' : ''}`;
         const meta = t.alive
-          ? `${pop.toLocaleString()} people · ${camps} camp${camps > 1 ? 's' : ''}<br>${territory} km²`
+          ? `${formatPop(pop)} people<br>${places}`
           : 'died out';
-        return `<div class="tribe-row${t.alive ? '' : ' dead'}">` +
+        const badge = t.alive
+          ? `<span class="badge">${ERA_LABELS[tribeEra(t)]}</span> ${dominantPostureGlyph(posture)}`
+          : '';
+        return `<div class="tribe-row${t.alive ? '' : ' dead'}${t.id === selectedTribeId ? ' selected' : ''}" data-tribe="${t.id}">` +
           `<span class="swatch" style="background: ${t.color}"></span>` +
-          `<span>${t.name}</span>` +
+          `<span>${t.name}</span> ${badge}` +
           `<span class="tribe-meta">${meta}</span></div>`;
       })
       .join('');
+
+    for (const row of tribesPanel.querySelectorAll('.tribe-row')) {
+      row.addEventListener('click', () => {
+        const id = Number(row.dataset.tribe);
+        selectedTribeId = selectedTribeId === id ? null : id;
+        renderTribes();
+        renderInspector();
+      });
+    }
+    renderInspector();
+  }
+
+  function renderInspector() {
+    if (selectedTribeId === null || !world.tribes || !world.tribes[selectedTribeId]) {
+      tribeInspector.style.display = 'none';
+      return;
+    }
+    const t = world.tribes[selectedTribeId];
+    const p = t.progress;
+    const posture = computePosture(t.traits);
+    const era = ERA_LABELS[tribeEra(t)];
+    const arch = t.archetype === 'random' ? 'A people of their own kind'
+      : `${ARCHETYPES[t.archetype].label} archetype`;
+
+    const traitRows = TRAIT_KEYS.map((key) =>
+      `<div class="trait-row"><span class="trait-name">${TRAIT_LABELS[key]}</span>` +
+      `<span class="trait-bar"><div style="width:${(t.traits[key] * 100).toFixed(0)}%; background:${t.color}"></div></span></div>`
+    ).join('');
+
+    const techNames = [...p.techs].filter((id) => TECHS[id])
+      .map((id) => TECHS[id].name);
+    const target = p.target && TECHS[p.target] ? TECHS[p.target].name : '—';
+
+    const relations = Object.entries(world.relations || {})
+      .filter(([key]) => key.split('-').map(Number).includes(t.id))
+      .map(([key, rel]) => {
+        const otherId = key.split('-').map(Number).find((id) => id !== t.id);
+        const other = world.tribes[otherId];
+        return other && other.alive ? `${other.name}: ${rel.stance}` : null;
+      })
+      .filter(Boolean);
+
+    tribeInspector.style.display = '';
+    tribeInspector.innerHTML =
+      `<h3 style="color:${t.color}">${t.name}${t.alive ? '' : ' †'}</h3>` +
+      `<div class="insp-sub">${arch} · ${era} · ${GOVERNANCE_LABELS[p.governance]}</div>` +
+      `<div class="posture-row">` +
+      `<span>⚔ ${(posture.military * 100).toFixed(0)}%</span>` +
+      `<span>⚖ ${(posture.trade * 100).toFixed(0)}%</span>` +
+      `<span>📜 ${(posture.learning * 100).toFixed(0)}%</span></div>` +
+      traitRows +
+      `<div class="insp-section"><strong>Technologies:</strong> ${techNames.join(', ') || 'none'}</div>` +
+      `<div class="insp-section"><strong>Researching:</strong> ${target}</div>` +
+      `<div class="insp-section"><strong>Art:</strong> ${ART_STAGES[p.artStage]} · ` +
+      `<strong>Philosophy:</strong> ${PHIL_STAGES[p.philStage]}</div>` +
+      (relations.length
+        ? `<div class="insp-section"><strong>Relations:</strong> ${relations.join(' · ')}</div>`
+        : '');
   }
 
   function renderEvents() {
@@ -1951,6 +3047,14 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
         : '<div class="legend-row">No tribes yet — press the simulate button.</div>';
       legendBTitle.textContent = '';
       resourceLegend.innerHTML = '';
+    } else if (view === 'development') {
+      legendATitle.textContent = 'Development (era)';
+      terrainLegend.innerHTML = ERAS.map((era) =>
+        `<div class="legend-row">` +
+        `<span class="swatch" style="background: ${ERA_COLORS[era]}"></span>` +
+        `<span>${ERA_LABELS[era]}</span></div>`).join('');
+      legendBTitle.textContent = '';
+      resourceLegend.innerHTML = '';
     } else {
       // satellite / elevation
       legendATitle.textContent = 'Terrain';
@@ -1966,10 +3070,11 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
     if (world.tribes) {
       rows.push(['Year', world.year]);
       const alive = world.tribes.filter((t) => t.alive);
-      const totalPop = Math.round(world.settlements.reduce((sum, s) => sum + s.pop, 0));
+      const totalPop = alive.reduce((sum, t) => sum + totalTribePop(world, t), 0);
       rows.push(['Tribes', `${alive.length} of ${world.tribes.length}`]);
-      rows.push(['Settlements', world.settlements.length]);
-      rows.push(['Population', totalPop.toLocaleString()]);
+      if (world.bands.length) rows.push(['Nomad bands', world.bands.length]);
+      if (world.settlements.length) rows.push(['Settlements', world.settlements.length]);
+      rows.push(['Population', formatPop(totalPop)]);
     }
     rows.push(['Land area', `${s.landAreaKm2.toLocaleString()} km²`]);
     rows.push(['Land cover', `${s.landPercent.toFixed(1)}%`]);
@@ -1996,9 +3101,16 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
     const settlement = world.tribes ? settlementAt(world, tile.x, tile.y) : null;
     if (settlement) {
       const tribe = world.tribes[settlement.tribeId];
-      parts.push(`<strong>${settlement.name}</strong> — ${Math.round(settlement.pop)} people` +
+      parts.push(`<strong>${settlement.name}</strong> — ${formatPop(settlement.pop)} people` +
         (tribe ? ` of ${tribe.name}` : '') +
         ` (founded Yr ${settlement.foundedYear})`);
+    } else if (world.tribes) {
+      const band = bandAt(world, tile.x, tile.y);
+      if (band) {
+        const tribe = world.tribes[band.tribeId];
+        parts.push(`A wandering band of <strong>${tribe ? tribe.name : '?'}</strong> — ` +
+          `${Math.round(band.pop)} people`);
+      }
     }
     if (world.influenceOwner) {
       const ownerId = world.influenceOwner[tile.y * world.size + tile.x];

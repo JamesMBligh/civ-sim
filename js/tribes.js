@@ -144,13 +144,78 @@ function settlementScore(world, x, y) {
   return score;
 }
 
+// --- Bands: nomadic groups of people, not places -------------------------
+// While a tribe is nomadic it has no settlements. Its presence on the map
+// is its bands: unnamed, mobile, and transient. Named places begin only
+// when agriculture roots a people to the ground.
+
+function createBand(world, x, y, pop, tribeId) {
+  const band = {
+    id: world.nextBandId++,
+    x, y, pop, tribeId,
+    lastMove: world.year || 0,
+  };
+  world.bands.push(band);
+  return band;
+}
+
+function tribeBands(world, tribeId) {
+  return world.bands.filter((b) => b.tribeId === tribeId);
+}
+
+function tribeIsNomadic(world, tribe) {
+  return tribeSettlements(world, tribe.id).length === 0;
+}
+
+function bandAt(world, x, y, radius = 1) {
+  if (!world.bands) return null;
+  for (const b of world.bands) {
+    if (Math.abs(b.x - x) <= radius && Math.abs(b.y - y) <= radius) return b;
+  }
+  return null;
+}
+
+// Sedentism: called when a tribe masters Agriculture (or qualifies for a
+// fishing proto-village). Its bands converge on the best ground in their
+// range and become the tribe's first true settlement.
+function settleTribe(world, tribe, rng, { proto = false } = {}) {
+  const { size } = world;
+  const bands = tribeBands(world, tribe.id);
+  if (bands.length === 0) return null;
+
+  const cx = Math.round(bands.reduce((s, b) => s + b.x, 0) / bands.length);
+  const cy = Math.round(bands.reduce((s, b) => s + b.y, 0) / bands.length);
+
+  let best = null;
+  let bestScore = -Infinity;
+  const R = 14;
+  for (let dy = -R; dy <= R; dy++) {
+    for (let dx = -R; dx <= R; dx++) {
+      const x = cx + dx;
+      const y = cy + dy;
+      if (x < 4 || y < 4 || x >= size - 4 || y >= size - 4) continue;
+      const s = settlementScore(world, x, y);
+      if (s > bestScore) { bestScore = s; best = { x, y }; }
+    }
+  }
+  if (!best) return null;
+
+  const totalPop = bands.reduce((s, b) => s + b.pop, 0);
+  world.bands = world.bands.filter((b) => b.tribeId !== tribe.id);
+  const settlement = createSettlement(world, rng, best.x, best.y, totalPop, tribe.id);
+  if (proto) settlement.proto = true;
+  tribe.sedentaryYear = world.year;
+  return settlement;
+}
+
 function foundTribes(world, count = 7) {
   const rng = new RNG(world.seed + ':tribes');
   const { size } = world;
-  const MIN_SEPARATION = 26; // tiles (~100 km) between founding sites
+  const MIN_SEPARATION = 26; // tiles (~100 km) between home ranges
 
   // Score every eligible tile, then greedily take the best sites that
-  // keep their distance from already-chosen ones.
+  // keep their distance from already-chosen ones. These are home-range
+  // centres, not settlements — the arrivals are nomads.
   const scored = [];
   for (let y = 4; y < size - 4; y++) {
     for (let x = 4; x < size - 4; x++) {
@@ -173,28 +238,64 @@ function foundTribes(world, count = 7) {
 
   world.year = 0;
   world.settlements = [];
+  world.bands = [];
   world.nextSettlementId = 0;
+  world.nextBandId = 0;
   world.settlementNames = new Set();
-  world.tensions = new Set();
+  world.relations = {};
+
+  // Assign archetypes: each real-civilization preset once (shuffled),
+  // any remaining tribes are fully random peoples.
+  const archetypeIds = Object.keys(ARCHETYPES);
+  shuffleInPlace(archetypeIds, rng.fork('archetypes'));
 
   const takenNames = new Set();
-  world.tribes = sites.map((site, idx) => ({
-    id: idx,
-    name: generateTribeName(rng, takenNames),
-    color: TRIBE_COLORS[idx % TRIBE_COLORS.length],
-    alive: true,
-  }));
+  world.tribes = sites.map((site, idx) => {
+    const archetype = idx < archetypeIds.length ? archetypeIds[idx] : 'random';
+    const traits = rollTraits(rng.fork('traits:' + idx),
+      archetype === 'random' ? null : archetype);
+    return {
+      id: idx,
+      name: generateTribeName(rng, takenNames),
+      color: TRIBE_COLORS[idx % TRIBE_COLORS.length],
+      alive: true,
+      archetype,
+      traits,
+      foundingTraits: { ...traits },
+      nudges: {},
+      progress: {
+        techs: new Set(['flint_knapping']),
+        pools: { tech: 0, art: 0, philosophy: 0 },
+        governance: 'band',
+        artStage: 0,
+        philStage: 0,
+        target: null,
+      },
+      resourceAccess: new Set(),
+      tradePartners: 0,
+      sedentaryYear: null,
+      peakPop: 0,
+      rangeCenter: { x: site.x, y: site.y },
+    };
+  });
 
+  // Each tribe arrives as a couple of wandering bands near its range.
   for (const tribe of world.tribes) {
-    const site = sites[tribe.id];
-    createSettlement(world, rng, site.x, site.y, rng.int(90, 160), tribe.id);
+    const c = tribe.rangeCenter;
+    const nBands = rng.int(2, 3);
+    for (let k = 0; k < nBands; k++) {
+      const bx = Math.max(4, Math.min(size - 5, c.x + rng.int(-6, 6)));
+      const by = Math.max(4, Math.min(size - 5, c.y + rng.int(-6, 6)));
+      createBand(world, bx, by, rng.int(25, 55), tribe.id);
+    }
   }
 
   world.events = [{
     year: 0,
-    text: `${world.tribes.length} tribes arrived on the island and made their first camps.`,
+    text: `${world.tribes.length} tribes arrived on the island as wandering bands of foragers.`,
   }];
 
   computeInfluence(world);
+  computeResourceAccess(world);
   return world.tribes;
 }

@@ -21,8 +21,18 @@
   const zoomResetBtn = document.getElementById('zoom-reset-btn');
   const zoomLevelEl = document.getElementById('zoom-level');
 
+  const tribeInspector = document.getElementById('tribe-inspector');
+
   let world = null;
   let camera = createCamera();
+  let selectedTribeId = null;
+
+  function formatPop(n) {
+    n = Math.round(n);
+    if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+    if (n >= 10000) return (n / 1000).toFixed(1) + 'k';
+    return n.toLocaleString();
+  }
 
   function generate(seed) {
     const t0 = performance.now();
@@ -31,7 +41,10 @@
     seedInput.value = seed;
     simulateBtn.textContent = 'Found tribes & simulate 10 years';
     tribesSection.style.display = 'none';
-    if (viewSelect.value === 'communities') viewSelect.value = 'satellite';
+    selectedTribeId = null;
+    if (viewSelect.value === 'communities' || viewSelect.value === 'development') {
+      viewSelect.value = 'satellite';
+    }
     camera = createCamera();
     refreshView();
     renderStats(ms);
@@ -51,23 +64,86 @@
   }
 
   function renderTribes() {
-    const kmPerTile = world.kmPerTile;
     tribesPanel.innerHTML = world.tribes
       .slice()
-      .sort((a, b) => tribePopulation(world, b) - tribePopulation(world, a))
+      .sort((a, b) => totalTribePop(world, b) - totalTribePop(world, a))
       .map((t) => {
-        const pop = Math.round(tribePopulation(world, t));
-        const camps = tribeSettlements(world, t.id).length;
-        const territory = ((t.territoryTiles || 0) * kmPerTile * kmPerTile).toLocaleString();
+        const pop = totalTribePop(world, t);
+        const posture = computePosture(t.traits);
+        const nomadic = tribeIsNomadic(world, t);
+        const places = nomadic
+          ? `${tribeBands(world, t.id).length} bands`
+          : `${tribeSettlements(world, t.id).length} settlement${tribeSettlements(world, t.id).length > 1 ? 's' : ''}`;
         const meta = t.alive
-          ? `${pop.toLocaleString()} people · ${camps} camp${camps > 1 ? 's' : ''}<br>${territory} km²`
+          ? `${formatPop(pop)} people<br>${places}`
           : 'died out';
-        return `<div class="tribe-row${t.alive ? '' : ' dead'}">` +
+        const badge = t.alive
+          ? `<span class="badge">${ERA_LABELS[tribeEra(t)]}</span> ${dominantPostureGlyph(posture)}`
+          : '';
+        return `<div class="tribe-row${t.alive ? '' : ' dead'}${t.id === selectedTribeId ? ' selected' : ''}" data-tribe="${t.id}">` +
           `<span class="swatch" style="background: ${t.color}"></span>` +
-          `<span>${t.name}</span>` +
+          `<span>${t.name}</span> ${badge}` +
           `<span class="tribe-meta">${meta}</span></div>`;
       })
       .join('');
+
+    for (const row of tribesPanel.querySelectorAll('.tribe-row')) {
+      row.addEventListener('click', () => {
+        const id = Number(row.dataset.tribe);
+        selectedTribeId = selectedTribeId === id ? null : id;
+        renderTribes();
+        renderInspector();
+      });
+    }
+    renderInspector();
+  }
+
+  function renderInspector() {
+    if (selectedTribeId === null || !world.tribes || !world.tribes[selectedTribeId]) {
+      tribeInspector.style.display = 'none';
+      return;
+    }
+    const t = world.tribes[selectedTribeId];
+    const p = t.progress;
+    const posture = computePosture(t.traits);
+    const era = ERA_LABELS[tribeEra(t)];
+    const arch = t.archetype === 'random' ? 'A people of their own kind'
+      : `${ARCHETYPES[t.archetype].label} archetype`;
+
+    const traitRows = TRAIT_KEYS.map((key) =>
+      `<div class="trait-row"><span class="trait-name">${TRAIT_LABELS[key]}</span>` +
+      `<span class="trait-bar"><div style="width:${(t.traits[key] * 100).toFixed(0)}%; background:${t.color}"></div></span></div>`
+    ).join('');
+
+    const techNames = [...p.techs].filter((id) => TECHS[id])
+      .map((id) => TECHS[id].name);
+    const target = p.target && TECHS[p.target] ? TECHS[p.target].name : '—';
+
+    const relations = Object.entries(world.relations || {})
+      .filter(([key]) => key.split('-').map(Number).includes(t.id))
+      .map(([key, rel]) => {
+        const otherId = key.split('-').map(Number).find((id) => id !== t.id);
+        const other = world.tribes[otherId];
+        return other && other.alive ? `${other.name}: ${rel.stance}` : null;
+      })
+      .filter(Boolean);
+
+    tribeInspector.style.display = '';
+    tribeInspector.innerHTML =
+      `<h3 style="color:${t.color}">${t.name}${t.alive ? '' : ' †'}</h3>` +
+      `<div class="insp-sub">${arch} · ${era} · ${GOVERNANCE_LABELS[p.governance]}</div>` +
+      `<div class="posture-row">` +
+      `<span>⚔ ${(posture.military * 100).toFixed(0)}%</span>` +
+      `<span>⚖ ${(posture.trade * 100).toFixed(0)}%</span>` +
+      `<span>📜 ${(posture.learning * 100).toFixed(0)}%</span></div>` +
+      traitRows +
+      `<div class="insp-section"><strong>Technologies:</strong> ${techNames.join(', ') || 'none'}</div>` +
+      `<div class="insp-section"><strong>Researching:</strong> ${target}</div>` +
+      `<div class="insp-section"><strong>Art:</strong> ${ART_STAGES[p.artStage]} · ` +
+      `<strong>Philosophy:</strong> ${PHIL_STAGES[p.philStage]}</div>` +
+      (relations.length
+        ? `<div class="insp-section"><strong>Relations:</strong> ${relations.join(' · ')}</div>`
+        : '');
   }
 
   function renderEvents() {
@@ -184,6 +260,14 @@
         : '<div class="legend-row">No tribes yet — press the simulate button.</div>';
       legendBTitle.textContent = '';
       resourceLegend.innerHTML = '';
+    } else if (view === 'development') {
+      legendATitle.textContent = 'Development (era)';
+      terrainLegend.innerHTML = ERAS.map((era) =>
+        `<div class="legend-row">` +
+        `<span class="swatch" style="background: ${ERA_COLORS[era]}"></span>` +
+        `<span>${ERA_LABELS[era]}</span></div>`).join('');
+      legendBTitle.textContent = '';
+      resourceLegend.innerHTML = '';
     } else {
       // satellite / elevation
       legendATitle.textContent = 'Terrain';
@@ -199,10 +283,11 @@
     if (world.tribes) {
       rows.push(['Year', world.year]);
       const alive = world.tribes.filter((t) => t.alive);
-      const totalPop = Math.round(world.settlements.reduce((sum, s) => sum + s.pop, 0));
+      const totalPop = alive.reduce((sum, t) => sum + totalTribePop(world, t), 0);
       rows.push(['Tribes', `${alive.length} of ${world.tribes.length}`]);
-      rows.push(['Settlements', world.settlements.length]);
-      rows.push(['Population', totalPop.toLocaleString()]);
+      if (world.bands.length) rows.push(['Nomad bands', world.bands.length]);
+      if (world.settlements.length) rows.push(['Settlements', world.settlements.length]);
+      rows.push(['Population', formatPop(totalPop)]);
     }
     rows.push(['Land area', `${s.landAreaKm2.toLocaleString()} km²`]);
     rows.push(['Land cover', `${s.landPercent.toFixed(1)}%`]);
@@ -229,9 +314,16 @@
     const settlement = world.tribes ? settlementAt(world, tile.x, tile.y) : null;
     if (settlement) {
       const tribe = world.tribes[settlement.tribeId];
-      parts.push(`<strong>${settlement.name}</strong> — ${Math.round(settlement.pop)} people` +
+      parts.push(`<strong>${settlement.name}</strong> — ${formatPop(settlement.pop)} people` +
         (tribe ? ` of ${tribe.name}` : '') +
         ` (founded Yr ${settlement.foundedYear})`);
+    } else if (world.tribes) {
+      const band = bandAt(world, tile.x, tile.y);
+      if (band) {
+        const tribe = world.tribes[band.tribeId];
+        parts.push(`A wandering band of <strong>${tribe ? tribe.name : '?'}</strong> — ` +
+          `${Math.round(band.pop)} people`);
+      }
     }
     if (world.influenceOwner) {
       const ownerId = world.influenceOwner[tile.y * world.size + tile.x];

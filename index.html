@@ -182,6 +182,56 @@
     color: var(--text-dim);
   }
   #events-log .ev-year { color: var(--accent); font-weight: 600; }
+  .tribe-row { cursor: pointer; border-radius: 4px; padding-left: 4px; }
+  .tribe-row:hover { background: rgba(255,255,255,0.05); }
+  .tribe-row.selected { background: rgba(79,163,209,0.15); }
+  .tribe-row .badge {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: var(--bg);
+    border: 1px solid var(--panel-border);
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+  #tribe-inspector {
+    background: var(--bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    padding: 10px;
+    margin-top: 8px;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  #tribe-inspector h3 { font-size: 13px; margin-bottom: 2px; }
+  #tribe-inspector .insp-sub { color: var(--text-dim); margin-bottom: 6px; }
+  .trait-row { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+  .trait-row .trait-name { width: 92px; color: var(--text-dim); font-size: 11px; }
+  .trait-bar {
+    flex: 1;
+    height: 6px;
+    background: var(--panel-border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .trait-bar > div { height: 100%; border-radius: 3px; }
+  .posture-row {
+    display: flex;
+    gap: 6px;
+    margin: 6px 0;
+  }
+  .posture-row span {
+    flex: 1;
+    text-align: center;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 3px;
+    padding: 3px 0;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  #tribe-inspector .insp-section { margin-top: 6px; color: var(--text-dim); }
+  #tribe-inspector .insp-section strong { color: var(--text); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -197,6 +247,7 @@
     <select id="view-select">
       <option value="satellite">Satellite</option>
       <option value="communities">Communities</option>
+      <option value="development">Development</option>
       <option value="elevation">Elevation</option>
       <option value="rainfall">Avg rainfall</option>
       <option value="temperature">Avg temperature</option>
@@ -221,6 +272,7 @@
     <div id="tribes-section" style="display: none">
       <h2>Tribes</h2>
       <div id="tribes-panel"></div>
+      <div id="tribe-inspector" style="display: none"></div>
       <h2>Chronicle</h2>
       <div id="events-log"></div>
     </div>
@@ -238,7 +290,10 @@
 <script src="js/rivers.js"></script>
 <script src="js/resources.js"></script>
 <script src="js/world.js"></script>
+<script src="js/traits.js"></script>
+<script src="js/tech.js"></script>
 <script src="js/tribes.js"></script>
+<script src="js/relations.js"></script>
 <script src="js/sim.js"></script>
 <script src="js/render.js"></script>
 <script src="js/main.js"></script>
