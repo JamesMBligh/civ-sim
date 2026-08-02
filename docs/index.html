@@ -1,0 +1,1207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Civ Sim — Island Landscape</title>
+<style>
+  :root {
+    --bg: #10141a;
+    --panel: #1a2029;
+    --panel-border: #2a3341;
+    --text: #d7dee8;
+    --text-dim: #8a97a8;
+    --accent: #4fa3d1;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--panel-border);
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; font-weight: 600; margin-right: 8px; }
+  header .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  label { font-size: 13px; color: var(--text-dim); }
+  input[type="text"] {
+    background: var(--bg);
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 5px 8px;
+    width: 130px;
+    font-size: 13px;
+  }
+  button {
+    background: var(--accent);
+    border: none;
+    color: #08131b;
+    font-weight: 600;
+    padding: 6px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  button:hover { filter: brightness(1.1); }
+  button.secondary {
+    background: transparent;
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    font-weight: 400;
+  }
+  select {
+    background: var(--bg);
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 5px 8px;
+    font-size: 13px;
+  }
+  main { display: flex; flex: 1; min-height: 0; }
+  #map-container {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px;
+    min-width: 0;
+  }
+  canvas {
+    image-rendering: pixelated;
+    max-width: 100%;
+    max-height: 100%;
+    border: 1px solid var(--panel-border);
+    cursor: crosshair;
+  }
+  aside {
+    width: 260px;
+    background: var(--panel);
+    border-left: 1px solid var(--panel-border);
+    padding: 14px;
+    overflow-y: auto;
+    font-size: 13px;
+    flex-shrink: 0;
+  }
+  aside h2 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    margin: 14px 0 6px;
+  }
+  aside h2:first-child { margin-top: 0; }
+  .legend-row, .stat-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0;
+  }
+  .swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    border: 1px solid rgba(255,255,255,0.15);
+  }
+  .stat-row { justify-content: space-between; }
+  .stat-row .value { color: var(--text-dim); }
+  #tile-info {
+    background: var(--bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    min-height: 84px;
+    line-height: 1.5;
+    color: var(--text-dim);
+  }
+  #tile-info strong { color: var(--text); }
+  .ramp-bar {
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(255,255,255,0.15);
+    margin: 4px 0 2px;
+  }
+  .ramp-labels {
+    display: flex;
+    justify-content: space-between;
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Civ Sim</h1>
+  <div class="controls">
+    <label for="seed-input">Seed</label>
+    <input type="text" id="seed-input" spellcheck="false">
+    <button id="generate-btn">Generate</button>
+    <button id="random-btn" class="secondary">Random</button>
+    <label for="view-select">View</label>
+    <select id="view-select">
+      <option value="satellite">Satellite</option>
+      <option value="elevation">Elevation</option>
+      <option value="rainfall">Avg rainfall</option>
+      <option value="temperature">Avg temperature</option>
+      <option value="natural">Natural resources</option>
+      <option value="minerals">Mineral resources</option>
+    </select>
+  </div>
+</header>
+<main>
+  <div id="map-container">
+    <canvas id="map-canvas"></canvas>
+  </div>
+  <aside>
+    <h2>Inspect</h2>
+    <div id="tile-info">Hover over the map to inspect a tile.</div>
+    <h2 id="legend-a-title">Terrain</h2>
+    <div id="terrain-legend"></div>
+    <h2 id="legend-b-title">Resources</h2>
+    <div id="resource-legend"></div>
+    <h2>Statistics</h2>
+    <div id="stats"></div>
+  </aside>
+</main>
+<script>
+// ---- js/rng.js ----
+// Seeded pseudo-random number generator so every map is reproducible from
+// its seed string. Uses xmur3 to hash the seed and mulberry32 as the PRNG.
+
+function xmur3(str) {
+  let h = 1779033703 ^ str.length;
+  for (let i = 0; i < str.length; i++) {
+    h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  return function () {
+    h = Math.imul(h ^ (h >>> 16), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    h ^= h >>> 16;
+    return h >>> 0;
+  };
+}
+
+function mulberry32(a) {
+  return function () {
+    a |= 0;
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+class RNG {
+  constructor(seedString) {
+    this.seedString = seedString;
+    const hash = xmur3(seedString);
+    this.next = mulberry32(hash());
+  }
+
+  // Float in [0, 1)
+  random() {
+    return this.next();
+  }
+
+  // Integer in [min, max] inclusive
+  int(min, max) {
+    return min + Math.floor(this.next() * (max - min + 1));
+  }
+
+  // Float in [min, max)
+  range(min, max) {
+    return min + this.next() * (max - min);
+  }
+
+  // Pick a random element from an array
+  pick(arr) {
+    return arr[this.int(0, arr.length - 1)];
+  }
+
+  // Derive an independent RNG stream (e.g. one for terrain, one for rivers)
+  // so adding a new consumer doesn't change every other stream's output.
+  fork(label) {
+    return new RNG(this.seedString + ':' + label);
+  }
+}
+
+function randomSeedString() {
+  const words = ['ash', 'brook', 'crag', 'dale', 'elm', 'fen', 'glen', 'heath',
+    'isle', 'loch', 'moor', 'ness', 'oak', 'peak', 'reed', 'shore',
+    'tarn', 'vale', 'wold', 'yew'];
+  const a = words[Math.floor(Math.random() * words.length)];
+  const b = words[Math.floor(Math.random() * words.length)];
+  const n = Math.floor(Math.random() * 1000);
+  return `${a}-${b}-${n}`;
+}
+
+// ---- js/noise.js ----
+// Seeded 2D value noise with fractal (fBm) layering. Self-contained so the
+// project has no external dependencies.
+
+class ValueNoise {
+  constructor(rng, gridSize = 256) {
+    this.gridSize = gridSize;
+    // Lattice of random values, wrapped with a permutation-free modulo.
+    this.values = new Float32Array(gridSize * gridSize);
+    for (let i = 0; i < this.values.length; i++) {
+      this.values[i] = rng.random();
+    }
+  }
+
+  latticeValue(ix, iy) {
+    const gs = this.gridSize;
+    const x = ((ix % gs) + gs) % gs;
+    const y = ((iy % gs) + gs) % gs;
+    return this.values[y * gs + x];
+  }
+
+  // Smoothstep-interpolated noise in [0, 1]
+  sample(x, y) {
+    const x0 = Math.floor(x);
+    const y0 = Math.floor(y);
+    const fx = x - x0;
+    const fy = y - y0;
+    // Quintic fade for smooth derivatives
+    const u = fx * fx * fx * (fx * (fx * 6 - 15) + 10);
+    const v = fy * fy * fy * (fy * (fy * 6 - 15) + 10);
+
+    const v00 = this.latticeValue(x0, y0);
+    const v10 = this.latticeValue(x0 + 1, y0);
+    const v01 = this.latticeValue(x0, y0 + 1);
+    const v11 = this.latticeValue(x0 + 1, y0 + 1);
+
+    const top = v00 + (v10 - v00) * u;
+    const bottom = v01 + (v11 - v01) * u;
+    return top + (bottom - top) * v;
+  }
+
+  // Fractal Brownian motion: layered octaves of noise, in [0, 1]
+  fbm(x, y, octaves = 5, lacunarity = 2.0, gain = 0.5) {
+    let amplitude = 1;
+    let frequency = 1;
+    let sum = 0;
+    let norm = 0;
+    for (let i = 0; i < octaves; i++) {
+      sum += amplitude * this.sample(x * frequency, y * frequency);
+      norm += amplitude;
+      amplitude *= gain;
+      frequency *= lacunarity;
+    }
+    return sum / norm;
+  }
+}
+
+// ---- js/terrain.js ----
+// Terrain generation: builds the elevation and moisture fields and
+// classifies each tile into a terrain type.
+//
+// Scale: the map is 256x256 tiles at ~4 km per tile, giving a landmass of
+// roughly 800-1000 km north-south — about the size of Great Britain.
+
+const TERRAIN = {
+  DEEP_OCEAN: 'deep_ocean',
+  OCEAN: 'ocean',
+  COAST: 'coast',        // beaches / tidal flats
+  MARSH: 'marsh',
+  PLAINS: 'plains',
+  GRASSLAND: 'grassland',
+  FOREST: 'forest',
+  HILLS: 'hills',
+  MOUNTAINS: 'mountains',
+  PEAKS: 'peaks',
+  LAKE: 'lake',
+  RIVER: 'river',
+};
+
+// Elevation thresholds (0..1). Sea level is 0.5.
+const SEA_LEVEL = 0.5;
+const ELEV = {
+  DEEP: 0.35,
+  COAST_MAX: 0.53,
+  HILLS: 0.72,
+  MOUNTAINS: 0.83,
+  PEAKS: 0.93,
+};
+
+// Unit conversions used for display and (later) simulation. Elevation above
+// sea level tops out around ~1150 m, comparable to the British uplands.
+function elevationToMeters(e) {
+  return Math.round((e - SEA_LEVEL) * 2 * 1300);
+}
+
+// Moisture 0..1 maps onto a UK-like annual rainfall range (~400-2800 mm).
+function moistureToRainfallMm(m) {
+  return Math.round(400 + m * 2400);
+}
+
+function generateTerrain(world, rng) {
+  const { size } = world;
+  const elevNoise = new ValueNoise(rng.fork('elevation'));
+  const moistNoise = new ValueNoise(rng.fork('moisture'));
+  const warpNoise = new ValueNoise(rng.fork('warp'));
+  const tempNoise = new ValueNoise(rng.fork('temperature'));
+
+  const elevation = new Float32Array(size * size);
+  const moisture = new Float32Array(size * size);
+  const temperature = new Float32Array(size * size);
+
+  // The island's centre is jittered a little so coastlines vary run to run.
+  const centerRng = rng.fork('center');
+  const cx = size * centerRng.range(0.45, 0.55);
+  const cy = size * centerRng.range(0.45, 0.55);
+  const maxDist = size * 0.5;
+
+  // Prevailing wind comes from a random compass direction; the windward side
+  // of the island is wetter, like Atlantic weather hitting western Britain.
+  const windAngle = centerRng.range(0, Math.PI * 2);
+  const windX = Math.cos(windAngle);
+  const windY = Math.sin(windAngle);
+  world.windAngle = windAngle;
+
+  const freq = 4.5 / size; // base noise frequency
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+
+      // Domain warp makes coastlines and ridges less blobby.
+      const wx = warpNoise.fbm(x * freq * 2, y * freq * 2, 3) - 0.5;
+      const wy = warpNoise.fbm(x * freq * 2 + 40, y * freq * 2 + 40, 3) - 0.5;
+      const nx = (x + wx * 60) * freq;
+      const ny = (y + wy * 60) * freq;
+
+      let e = elevNoise.fbm(nx, ny, 6, 2.0, 0.5);
+
+      // Radial falloff guarantees a single island surrounded by ocean.
+      const dx = (x - cx) / maxDist;
+      const dy = (y - cy) / maxDist;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      // Gentle in the interior, steep near the edge.
+      const falloff = Math.max(0, 1 - Math.pow(d, 2.6));
+      e = e * falloff;
+
+      // Re-normalise into 0..1 with sea level at 0.5: noise*falloff peaks
+      // around ~0.75, so stretch it. The soft cap above 0.85 keeps summit
+      // plateaus from flattening into one huge blob of peaks.
+      e = Math.min(1, e * 1.42);
+      if (e > 0.85) e = 0.85 + (e - 0.85) * 0.6;
+
+      elevation[i] = e;
+
+      // Moisture: base noise plus a windward bonus, minus a rain shadow for
+      // tiles far downwind (crude but produces a wet coast / drier interior).
+      const mBase = moistNoise.fbm(x * freq * 1.5 + 100, y * freq * 1.5 + 100, 4);
+      const alongWind = ((x - cx) * windX + (y - cy) * windY) / maxDist; // -1..1
+      const windward = -alongWind * 0.15; // upwind side gets +, downwind -
+      moisture[i] = Math.max(0, Math.min(1, mBase + windward));
+
+      // Average annual temperature (°C): warmer in the south (bottom of the
+      // map), cooling with altitude at ~6.5°C per 1000 m, plus local
+      // variation. The surrounding sea is thermally moderated.
+      const latFrac = y / size; // 0 = north edge, 1 = south edge
+      let t = 6.5 + 7.5 * latFrac;
+      if (e > SEA_LEVEL) {
+        const meters = (e - SEA_LEVEL) * 2 * 1300;
+        t -= meters * 0.0065;
+      } else {
+        t = 8.5 + 3.5 * latFrac; // sea surface, milder gradient
+      }
+      t += (tempNoise.fbm(x * freq * 2 + 200, y * freq * 2 + 200, 3) - 0.5) * 2;
+      temperature[i] = t;
+    }
+  }
+
+  world.elevation = elevation;
+  world.moisture = moisture;
+  world.temperature = temperature;
+
+  classifyTerrain(world);
+}
+
+function classifyTerrain(world) {
+  const { size, elevation, moisture } = world;
+  const terrain = new Array(size * size);
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      const e = elevation[i];
+      const m = moisture[i];
+
+      if (e < ELEV.DEEP) {
+        terrain[i] = TERRAIN.DEEP_OCEAN;
+      } else if (e < SEA_LEVEL) {
+        terrain[i] = TERRAIN.OCEAN;
+      } else if (e < ELEV.COAST_MAX) {
+        terrain[i] = m > 0.72 ? TERRAIN.MARSH : TERRAIN.COAST;
+      } else if (e < ELEV.HILLS) {
+        if (m > 0.62) terrain[i] = TERRAIN.FOREST;
+        else if (m > 0.4) terrain[i] = TERRAIN.GRASSLAND;
+        else terrain[i] = TERRAIN.PLAINS;
+      } else if (e < ELEV.MOUNTAINS) {
+        terrain[i] = m > 0.66 ? TERRAIN.FOREST : TERRAIN.HILLS;
+      } else if (e < ELEV.PEAKS) {
+        terrain[i] = TERRAIN.MOUNTAINS;
+      } else {
+        terrain[i] = TERRAIN.PEAKS;
+      }
+    }
+  }
+
+  world.terrain = terrain;
+}
+
+function isWater(terrainType) {
+  return terrainType === TERRAIN.DEEP_OCEAN ||
+    terrainType === TERRAIN.OCEAN ||
+    terrainType === TERRAIN.LAKE ||
+    terrainType === TERRAIN.RIVER;
+}
+
+function isSea(terrainType) {
+  return terrainType === TERRAIN.DEEP_OCEAN || terrainType === TERRAIN.OCEAN;
+}
+
+// ---- js/rivers.js ----
+// River generation: springs start in high, wet terrain and flow downhill to
+// the sea, carving RIVER tiles. Where a path gets stuck in a depression it
+// fills a small LAKE and continues from the lake's lowest rim.
+
+function generateRivers(world, rng) {
+  const { size, elevation, terrain } = world;
+  const riverRng = rng.fork('rivers');
+
+  // rivers[i] = 0 (none) or flow volume (1+); larger volume = wider river
+  const riverFlow = new Uint16Array(size * size);
+
+  // Collect candidate springs: high-elevation land, weighted toward wetter
+  // tiles. Aim for a realistic count of major rivers for a UK-sized island.
+  const candidates = [];
+  for (let y = 2; y < size - 2; y++) {
+    for (let x = 2; x < size - 2; x++) {
+      const i = y * size + x;
+      if (elevation[i] > 0.68 && !isSea(terrain[i])) {
+        candidates.push(i);
+      }
+    }
+  }
+
+  const targetRivers = Math.min(candidates.length, riverRng.int(14, 22));
+  shuffleInPlace(candidates, riverRng);
+
+  const NEIGHBORS = [
+    [-1, -1], [0, -1], [1, -1],
+    [-1, 0], [1, 0],
+    [-1, 1], [0, 1], [1, 1],
+  ];
+
+  let springsUsed = 0;
+  for (let c = 0; c < candidates.length && springsUsed < targetRivers; c++) {
+    const start = candidates[c];
+    // Keep springs apart so rivers spread across the island.
+    if (tooCloseToRiver(start, riverFlow, size, 6)) continue;
+
+    const path = tracePath(start);
+    if (path && path.length >= 5) {
+      springsUsed++;
+      for (const idx of path) {
+        riverFlow[idx] = Math.min(65535, riverFlow[idx] + 1);
+      }
+    }
+  }
+
+  // Stamp river/lake tiles onto the terrain (not over sea).
+  for (let i = 0; i < riverFlow.length; i++) {
+    if (riverFlow[i] > 0 && !isSea(terrain[i])) {
+      terrain[i] = TERRAIN.RIVER;
+    }
+  }
+
+  world.riverFlow = riverFlow;
+
+  // --- helpers ---
+
+  function tracePath(startIdx) {
+    const path = [];
+    const visited = new Set();
+    let current = startIdx;
+    // Work on a copy of elevations we can raise when filling depressions.
+    const filled = new Map();
+    const elevAt = (i) => (filled.has(i) ? filled.get(i) : elevation[i]);
+
+    for (let steps = 0; steps < size * 4; steps++) {
+      if (visited.has(current)) return null; // loop safety
+      visited.add(current);
+      path.push(current);
+
+      if (isSea(terrain[current])) {
+        path.pop(); // don't stamp the ocean tile itself
+        return path;
+      }
+      // Merging into an existing river completes this one.
+      if (riverFlow[current] > 0 && current !== startIdx) {
+        return path;
+      }
+
+      const cx = current % size;
+      const cy = (current / size) | 0;
+      let best = -1;
+      let bestElev = Infinity;
+      for (const [dx, dy] of NEIGHBORS) {
+        const nx = cx + dx;
+        const ny = cy + dy;
+        if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+        const ni = ny * size + nx;
+        if (visited.has(ni)) continue;
+        const ne = elevAt(ni);
+        if (ne < bestElev) {
+          bestElev = ne;
+          best = ni;
+        }
+      }
+
+      if (best === -1) return path; // boxed in; end here
+
+      // Depression: raise the current tile's water level slightly so flow
+      // can spill over the rim (simple flood-and-spill). Mark it a lake.
+      if (bestElev > elevAt(current)) {
+        filled.set(best, elevAt(current) + 0.001);
+        if (!isSea(terrain[current])) {
+          terrain[current] = TERRAIN.LAKE;
+        }
+      }
+      current = best;
+    }
+    return path;
+  }
+
+  function tooCloseToRiver(idx, flow, sz, radius) {
+    const x = idx % sz;
+    const y = (idx / sz) | 0;
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= sz || ny >= sz) continue;
+        if (flow[ny * sz + nx] > 0) return true;
+      }
+    }
+    return false;
+  }
+}
+
+function shuffleInPlace(arr, rng) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = rng.int(0, i);
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+
+// ---- js/resources.js ----
+// Resource placement. Each resource has terrain it can appear on and a
+// density; placement is seeded so it's reproducible. Resources sit near
+// where they'd plausibly occur on Earth: ores in mountains, fish on coasts,
+// fertile soil along rivers, and so on.
+
+// category: 'natural' = living/renewable resources, 'mineral' = extractive
+// deposits. The map can be filtered to show either group on its own.
+//
+// The mineral set covers the strategic materials of the Stone, Bronze and
+// Iron Ages:
+//   Stone Age  — flint (knappable toolstone), obsidian (volcanic glass),
+//                stone, clay, salt
+//   Bronze Age — copper + tin (bronze), gold, silver, lead
+//   Iron Age   — iron ore (abundant, unlike tin/copper)
+const RESOURCES = {
+  FISH: { id: 'fish', name: 'Fish', color: '#5fc9e8', symbol: '◆', category: 'natural' },
+  GAME: { id: 'game', name: 'Wild game', color: '#c98d5f', symbol: '▲', category: 'natural' },
+  TIMBER: { id: 'timber', name: 'Timber', color: '#3e7a3e', symbol: '♠', category: 'natural' },
+  FERTILE: { id: 'fertile', name: 'Fertile soil', color: '#d9c94a', symbol: '❋', category: 'natural' },
+  STONE: { id: 'stone', name: 'Stone', color: '#a8a8b0', symbol: '■', category: 'mineral' },
+  FLINT: { id: 'flint', name: 'Flint', color: '#4d5866', symbol: '◆', category: 'mineral' },
+  OBSIDIAN: { id: 'obsidian', name: 'Obsidian', color: '#6a4d8f', symbol: '◆', category: 'mineral' },
+  COPPER: { id: 'copper', name: 'Copper ore', color: '#e08a3c', symbol: '●', category: 'mineral' },
+  TIN: { id: 'tin', name: 'Tin ore', color: '#7fa8b8', symbol: '●', category: 'mineral' },
+  IRON: { id: 'iron', name: 'Iron ore', color: '#8a4a4a', symbol: '●', category: 'mineral' },
+  GOLD: { id: 'gold', name: 'Gold', color: '#f2c118', symbol: '●', category: 'mineral' },
+  SILVER: { id: 'silver', name: 'Silver ore', color: '#c2cede', symbol: '●', category: 'mineral' },
+  LEAD: { id: 'lead', name: 'Lead ore', color: '#5f6672', symbol: '●', category: 'mineral' },
+  CLAY: { id: 'clay', name: 'Clay', color: '#b06848', symbol: '▼', category: 'mineral' },
+  SALT: { id: 'salt', name: 'Salt', color: '#e8e8f0', symbol: '✦', category: 'mineral' },
+};
+
+function generateResources(world, rng) {
+  const { size, terrain, moisture, elevation } = world;
+  const resRng = rng.fork('resources');
+  const resources = new Array(size * size).fill(null);
+
+  const nearType = (x, y, type, radius) => {
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+        const t = terrain[ny * size + nx];
+        if (Array.isArray(type) ? type.includes(t) : t === type) return true;
+      }
+    }
+    return false;
+  };
+
+  // Ore provinces: the scarce Bronze Age metals don't occur evenly across a
+  // landmass — they cluster in a few mineralised districts (think Cornish
+  // tin or Welsh gold). Each metal gets 1-2 upland regions; deposits only
+  // spawn inside them, so their locations shape future trade routes.
+  const uplandTiles = [];
+  for (let i = 0; i < size * size; i++) {
+    if (terrain[i] === TERRAIN.HILLS || terrain[i] === TERRAIN.MOUNTAINS) {
+      uplandTiles.push(i);
+    }
+  }
+
+  const makeProvince = (label, count, radius) => {
+    const r = resRng.fork(label);
+    const centers = [];
+    for (let k = 0; k < count && uplandTiles.length > 0; k++) {
+      centers.push(r.pick(uplandTiles));
+    }
+    return { centers, radius };
+  };
+
+  const provinces = {
+    tin: makeProvince('tin', 2, 13),
+    gold: makeProvince('gold', 2, 10),
+    // Silver and lead co-occur in nature (silver is refined from galena,
+    // a lead ore), so they share one province.
+    silverLead: makeProvince('silver-lead', 2, 12),
+  };
+
+  const inProvince = (p, x, y) => {
+    for (const c of p.centers) {
+      const dx = x - (c % size);
+      const dy = y - ((c / size) | 0);
+      if (dx * dx + dy * dy <= p.radius * p.radius) return true;
+    }
+    return false;
+  };
+  world.oreProvinces = provinces;
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      const t = terrain[i];
+      const roll = resRng.random();
+
+      switch (t) {
+        case TERRAIN.OCEAN:
+          // Fishing grounds hug the shore.
+          if (roll < 0.045 && nearType(x, y, [TERRAIN.COAST, TERRAIN.MARSH], 2)) {
+            resources[i] = RESOURCES.FISH;
+          }
+          break;
+
+        case TERRAIN.COAST:
+          if (roll < 0.02) resources[i] = RESOURCES.SALT;
+          else if (roll < 0.05 && nearType(x, y, TERRAIN.RIVER, 2)) {
+            resources[i] = RESOURCES.CLAY;
+          } else if (roll < 0.065) {
+            // Flint nodules erode out of chalk sea-cliffs onto beaches.
+            resources[i] = RESOURCES.FLINT;
+          }
+          break;
+
+        case TERRAIN.MARSH:
+          if (roll < 0.06) resources[i] = RESOURCES.CLAY;
+          break;
+
+        case TERRAIN.PLAINS:
+        case TERRAIN.GRASSLAND:
+          if (nearType(x, y, [TERRAIN.RIVER, TERRAIN.LAKE], 2)) {
+            // River valleys are the breadbasket.
+            if (roll < 0.22) resources[i] = RESOURCES.FERTILE;
+            else if (roll < 0.26) resources[i] = RESOURCES.CLAY;
+          } else if (roll < 0.04 && moisture[i] > 0.45) {
+            resources[i] = RESOURCES.FERTILE;
+          } else if (roll < 0.055) {
+            resources[i] = RESOURCES.GAME;
+          } else if (roll < 0.075 && elevation[i] < 0.62) {
+            // Chalk downland: surface flint, the Stone Age's toolstone.
+            resources[i] = RESOURCES.FLINT;
+          }
+          break;
+
+        case TERRAIN.FOREST:
+          if (roll < 0.14) resources[i] = RESOURCES.TIMBER;
+          else if (roll < 0.19) resources[i] = RESOURCES.GAME;
+          break;
+
+        case TERRAIN.HILLS:
+          // Province metals first: scarce, and only in their districts.
+          if (inProvince(provinces.tin, x, y) && roll < 0.09) {
+            resources[i] = RESOURCES.TIN;
+          } else if (inProvince(provinces.gold, x, y) && roll < 0.05) {
+            resources[i] = RESOURCES.GOLD;
+          } else if (inProvince(provinces.silverLead, x, y) && roll < 0.045) {
+            resources[i] = RESOURCES.SILVER;
+          } else if (inProvince(provinces.silverLead, x, y) && roll < 0.095) {
+            resources[i] = RESOURCES.LEAD;
+          } else if (roll < 0.11 && roll >= 0.105 &&
+            nearType(x, y, TERRAIN.RIVER, 1)) {
+            // A trace of placer gold panned from upland streams.
+            resources[i] = RESOURCES.GOLD;
+          } else if (roll < 0.05) resources[i] = RESOURCES.STONE;
+          else if (roll < 0.07) resources[i] = RESOURCES.COPPER;
+          else if (roll < 0.085) resources[i] = RESOURCES.IRON;
+          else if (roll < 0.105) resources[i] = RESOURCES.GAME;
+          break;
+
+        case TERRAIN.MOUNTAINS:
+          if (inProvince(provinces.tin, x, y) && roll < 0.07) {
+            resources[i] = RESOURCES.TIN;
+          } else if (inProvince(provinces.gold, x, y) && roll < 0.04) {
+            resources[i] = RESOURCES.GOLD;
+          } else if (inProvince(provinces.silverLead, x, y) && roll < 0.04) {
+            resources[i] = RESOURCES.SILVER;
+          } else if (inProvince(provinces.silverLead, x, y) && roll < 0.08) {
+            resources[i] = RESOURCES.LEAD;
+          } else if (roll < 0.02 && nearType(x, y, TERRAIN.PEAKS, 2)) {
+            // Volcanic glass around the high summits.
+            resources[i] = RESOURCES.OBSIDIAN;
+          } else if (roll < 0.09) resources[i] = RESOURCES.STONE;
+          else if (roll < 0.125) resources[i] = RESOURCES.IRON;
+          else if (roll < 0.15) resources[i] = RESOURCES.COPPER;
+          break;
+
+        case TERRAIN.PEAKS:
+          if (roll < 0.04) resources[i] = RESOURCES.OBSIDIAN;
+          break;
+
+        default:
+          break;
+      }
+    }
+  }
+
+  world.resources = resources;
+}
+
+// ---- js/world.js ----
+// The World object holds the entire simulation state in memory.
+// Generation pipeline: terrain (elevation + moisture + biomes) -> rivers ->
+// resources. Later phases (tribes, simulation ticks) will build on this.
+
+const WORLD_SIZE = 256;      // tiles per side
+const KM_PER_TILE = 4;       // ~1000 km across: Great Britain scale
+
+function createWorld(seedString) {
+  const rng = new RNG(seedString);
+
+  const world = {
+    seed: seedString,
+    size: WORLD_SIZE,
+    kmPerTile: KM_PER_TILE,
+    elevation: null,   // Float32Array, 0..1, sea level at 0.5
+    moisture: null,    // Float32Array, 0..1
+    temperature: null, // Float32Array, average annual °C
+    terrain: null,     // Array of TERRAIN values
+    riverFlow: null,   // Uint16Array flow volume
+    resources: null,   // Array of RESOURCES entries or null
+    windAngle: 0,      // prevailing wind direction, radians
+  };
+
+  generateTerrain(world, rng);
+  generateRivers(world, rng);
+  generateResources(world, rng);
+
+  world.stats = computeStats(world);
+  return world;
+}
+
+function computeStats(world) {
+  const { size, terrain, resources } = world;
+  const terrainCounts = {};
+  const resourceCounts = {};
+  let landTiles = 0;
+
+  for (let i = 0; i < size * size; i++) {
+    const t = terrain[i];
+    terrainCounts[t] = (terrainCounts[t] || 0) + 1;
+    if (!isSea(t)) landTiles++;
+    const r = resources[i];
+    if (r) resourceCounts[r.id] = (resourceCounts[r.id] || 0) + 1;
+  }
+
+  const kmPerTile = world.kmPerTile;
+  return {
+    terrainCounts,
+    resourceCounts,
+    landTiles,
+    landAreaKm2: landTiles * kmPerTile * kmPerTile,
+    landPercent: (100 * landTiles) / (size * size),
+  };
+}
+
+function tileAt(world, x, y) {
+  if (x < 0 || y < 0 || x >= world.size || y >= world.size) return null;
+  const i = y * world.size + x;
+  return {
+    x,
+    y,
+    terrain: world.terrain[i],
+    elevation: world.elevation[i],
+    moisture: world.moisture[i],
+    temperature: world.temperature[i],
+    resource: world.resources[i],
+    riverFlow: world.riverFlow[i],
+  };
+}
+
+// ---- js/render.js ----
+// Canvas rendering: draws the world at a fixed pixel scale with three view
+// modes (terrain, elevation, moisture) and resource markers.
+
+const TILE_PX = 3;
+
+const TERRAIN_COLORS = {
+  [TERRAIN.DEEP_OCEAN]: [16, 42, 74],
+  [TERRAIN.OCEAN]: [30, 70, 110],
+  [TERRAIN.COAST]: [214, 196, 148],
+  [TERRAIN.MARSH]: [104, 130, 90],
+  [TERRAIN.PLAINS]: [168, 184, 108],
+  [TERRAIN.GRASSLAND]: [120, 160, 84],
+  [TERRAIN.FOREST]: [56, 104, 58],
+  [TERRAIN.HILLS]: [142, 128, 96],
+  [TERRAIN.MOUNTAINS]: [130, 122, 120],
+  [TERRAIN.PEAKS]: [235, 235, 240],
+  [TERRAIN.LAKE]: [60, 120, 160],
+  [TERRAIN.RIVER]: [70, 130, 175],
+};
+
+const TERRAIN_LABELS = {
+  [TERRAIN.DEEP_OCEAN]: 'Deep ocean',
+  [TERRAIN.OCEAN]: 'Ocean',
+  [TERRAIN.COAST]: 'Coast',
+  [TERRAIN.MARSH]: 'Marsh',
+  [TERRAIN.PLAINS]: 'Plains',
+  [TERRAIN.GRASSLAND]: 'Grassland',
+  [TERRAIN.FOREST]: 'Forest',
+  [TERRAIN.HILLS]: 'Hills',
+  [TERRAIN.MOUNTAINS]: 'Mountains',
+  [TERRAIN.PEAKS]: 'Peaks',
+  [TERRAIN.LAKE]: 'Lake',
+  [TERRAIN.RIVER]: 'River',
+};
+
+// Linear interpolation across a multi-stop color ramp; t in 0..1.
+function rampColor(stops, t) {
+  t = Math.max(0, Math.min(1, t));
+  const seg = t * (stops.length - 1);
+  const i = Math.min(stops.length - 2, Math.floor(seg));
+  const f = seg - i;
+  const a = stops[i];
+  const b = stops[i + 1];
+  return [
+    a[0] + (b[0] - a[0]) * f,
+    a[1] + (b[1] - a[1]) * f,
+    a[2] + (b[2] - a[2]) * f,
+  ];
+}
+
+// Display ranges for the climate views.
+const RAINFALL_RANGE = { min: 400, max: 2800 };   // mm/year
+const TEMPERATURE_RANGE = { min: -2, max: 14 };   // °C
+
+const RAINFALL_RAMP = [
+  [214, 190, 130],  // dry: parched tan
+  [150, 180, 100],  // moderate: green
+  [60, 140, 120],   // wet: teal
+  [30, 80, 170],    // very wet: deep blue
+];
+
+const TEMPERATURE_RAMP = [
+  [70, 90, 200],    // cold: blue
+  [110, 180, 210],  // cool: cyan
+  [220, 215, 120],  // mild: yellow
+  [225, 130, 60],   // warm: orange
+  [190, 40, 40],    // hot: red
+];
+
+function satelliteColor(world, x, y, i) {
+  const t = world.terrain[i];
+  let [r, g, b] = TERRAIN_COLORS[t] || [255, 0, 255];
+
+  // Hill-shade land by elevation for a bit of relief.
+  if (!isWater(t)) {
+    const e = world.elevation[i];
+    const west = x > 0 ? world.elevation[i - 1] : e;
+    const slope = (e - west) * 8;
+    const shade = 1 + Math.max(-0.25, Math.min(0.25, slope));
+    r *= shade; g *= shade; b *= shade;
+  }
+  return [r, g, b];
+}
+
+function renderWorld(world, canvas, view = 'satellite') {
+  const { size } = world;
+  canvas.width = size * TILE_PX;
+  canvas.height = size * TILE_PX;
+  const ctx = canvas.getContext('2d');
+
+  const img = ctx.createImageData(canvas.width, canvas.height);
+  const data = img.data;
+
+  const resourceView = view === 'minerals' || view === 'natural';
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      let r, g, b;
+      const sea = isSea(world.terrain[i]);
+
+      if (view === 'elevation') {
+        const e = world.elevation[i];
+        if (e < 0.5) {
+          // Water depths in blue
+          const t = e / 0.5;
+          r = 10 + 40 * t; g = 30 + 70 * t; b = 60 + 110 * t;
+        } else {
+          // Land heights from green to white
+          const t = (e - 0.5) / 0.5;
+          r = 60 + 175 * t; g = 130 + 105 * t; b = 60 + 175 * t;
+        }
+      } else if (view === 'rainfall') {
+        if (sea) { r = 22; g = 30; b = 44; }
+        else {
+          const mm = moistureToRainfallMm(world.moisture[i]);
+          const t = (mm - RAINFALL_RANGE.min) / (RAINFALL_RANGE.max - RAINFALL_RANGE.min);
+          [r, g, b] = rampColor(RAINFALL_RAMP, t);
+        }
+      } else if (view === 'temperature') {
+        if (sea) { r = 22; g = 30; b = 44; }
+        else {
+          const c = world.temperature[i];
+          const t = (c - TEMPERATURE_RANGE.min) / (TEMPERATURE_RANGE.max - TEMPERATURE_RANGE.min);
+          [r, g, b] = rampColor(TEMPERATURE_RAMP, t);
+        }
+      } else if (resourceView) {
+        // Desaturated satellite base so the resource markers stand out.
+        [r, g, b] = satelliteColor(world, x, y, i);
+        const lum = 0.3 * r + 0.59 * g + 0.11 * b;
+        const mix = sea ? 0.55 : 0.82; // keep a hint of blue in the sea
+        r = r + (lum - r) * mix;
+        g = g + (lum - g) * mix;
+        b = b + (lum - b) * mix;
+        r *= 0.7; g *= 0.7; b *= 0.7;
+      } else {
+        // satellite
+        [r, g, b] = satelliteColor(world, x, y, i);
+      }
+
+      // Fill the TILE_PX x TILE_PX block
+      for (let py = 0; py < TILE_PX; py++) {
+        let p = ((y * TILE_PX + py) * canvas.width + x * TILE_PX) * 4;
+        for (let px = 0; px < TILE_PX; px++) {
+          data[p] = r; data[p + 1] = g; data[p + 2] = b; data[p + 3] = 255;
+          p += 4;
+        }
+      }
+    }
+  }
+
+  ctx.putImageData(img, 0, 0);
+
+  // Resource markers: all of them on the satellite view, a single filtered
+  // category (drawn larger, with an outline) on the resource views.
+  if (view === 'satellite' || resourceView) {
+    const filter = view === 'minerals' ? 'mineral'
+      : view === 'natural' ? 'natural' : null;
+    const radius = resourceView ? TILE_PX * 0.75 : TILE_PX * 0.42;
+
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const res = world.resources[y * size + x];
+        if (!res) continue;
+        if (filter && res.category !== filter) continue;
+        const px = x * TILE_PX + TILE_PX / 2;
+        const py = y * TILE_PX + TILE_PX / 2;
+        ctx.fillStyle = res.color;
+        ctx.beginPath();
+        ctx.arc(px, py, radius, 0, Math.PI * 2);
+        ctx.fill();
+        if (resourceView) {
+          ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+          ctx.lineWidth = 0.8;
+          ctx.stroke();
+        }
+      }
+    }
+  }
+}
+
+// ---- js/main.js ----
+// App entry point: wires the UI to world generation and rendering.
+
+(function () {
+  const canvas = document.getElementById('map-canvas');
+  const seedInput = document.getElementById('seed-input');
+  const generateBtn = document.getElementById('generate-btn');
+  const randomBtn = document.getElementById('random-btn');
+  const viewSelect = document.getElementById('view-select');
+  const tileInfo = document.getElementById('tile-info');
+  const terrainLegend = document.getElementById('terrain-legend');
+  const resourceLegend = document.getElementById('resource-legend');
+  const legendATitle = document.getElementById('legend-a-title');
+  const legendBTitle = document.getElementById('legend-b-title');
+  const statsEl = document.getElementById('stats');
+
+  let world = null;
+
+  function generate(seed) {
+    const t0 = performance.now();
+    world = createWorld(seed);
+    const ms = performance.now() - t0;
+    seedInput.value = seed;
+    refreshView();
+    renderStats(ms);
+  }
+
+  function refreshView() {
+    const view = viewSelect.value;
+    renderWorld(world, canvas, view);
+    renderLegends(view);
+  }
+
+  function terrainSwatchRows() {
+    return Object.entries(TERRAIN_LABELS).map(([type, label]) => {
+      const [r, g, b] = TERRAIN_COLORS[type];
+      return `<div class="legend-row">` +
+        `<span class="swatch" style="background: rgb(${r},${g},${b})"></span>` +
+        `<span>${label}</span></div>`;
+    }).join('');
+  }
+
+  function resourceSwatchRows(category) {
+    return Object.values(RESOURCES)
+      .filter((res) => !category || res.category === category)
+      .map((res) =>
+        `<div class="legend-row">` +
+        `<span class="swatch" style="background: ${res.color}; border-radius: 50%"></span>` +
+        `<span>${res.name}</span></div>`)
+      .join('');
+  }
+
+  function rampLegend(stops, minLabel, maxLabel) {
+    const colors = stops.map(([r, g, b]) => `rgb(${r},${g},${b})`).join(', ');
+    return `<div class="ramp-bar" style="background: linear-gradient(to right, ${colors})"></div>` +
+      `<div class="ramp-labels"><span>${minLabel}</span><span>${maxLabel}</span></div>`;
+  }
+
+  // The two sidebar legend sections adapt to the active view.
+  function renderLegends(view) {
+    if (view === 'rainfall') {
+      legendATitle.textContent = 'Avg annual rainfall';
+      terrainLegend.innerHTML = rampLegend(RAINFALL_RAMP,
+        `${RAINFALL_RANGE.min} mm`, `${RAINFALL_RANGE.max} mm`);
+      legendBTitle.textContent = '';
+      resourceLegend.innerHTML = '';
+    } else if (view === 'temperature') {
+      legendATitle.textContent = 'Avg annual temperature';
+      terrainLegend.innerHTML = rampLegend(TEMPERATURE_RAMP,
+        `${TEMPERATURE_RANGE.min}°C`, `${TEMPERATURE_RANGE.max}°C`);
+      legendBTitle.textContent = '';
+      resourceLegend.innerHTML = '';
+    } else if (view === 'natural') {
+      legendATitle.textContent = 'Natural resources';
+      terrainLegend.innerHTML = resourceSwatchRows('natural');
+      legendBTitle.textContent = '';
+      resourceLegend.innerHTML = '';
+    } else if (view === 'minerals') {
+      legendATitle.textContent = 'Mineral resources';
+      terrainLegend.innerHTML = resourceSwatchRows('mineral');
+      legendBTitle.textContent = '';
+      resourceLegend.innerHTML = '';
+    } else {
+      // satellite / elevation
+      legendATitle.textContent = 'Terrain';
+      terrainLegend.innerHTML = terrainSwatchRows();
+      legendBTitle.textContent = 'Resources';
+      resourceLegend.innerHTML = resourceSwatchRows();
+    }
+  }
+
+  function renderStats(genMs) {
+    const s = world.stats;
+    const rows = [];
+    rows.push(['Land area', `${s.landAreaKm2.toLocaleString()} km²`]);
+    rows.push(['Land cover', `${s.landPercent.toFixed(1)}%`]);
+    const riverTiles = s.terrainCounts[TERRAIN.RIVER] || 0;
+    rows.push(['River tiles', riverTiles.toLocaleString()]);
+    const resTotal = Object.values(s.resourceCounts).reduce((a, b) => a + b, 0);
+    rows.push(['Resource sites', resTotal.toLocaleString()]);
+    rows.push(['Generated in', `${genMs.toFixed(0)} ms`]);
+
+    statsEl.innerHTML = rows
+      .map(([k, v]) => `<div class="stat-row"><span>${k}</span><span class="value">${v}</span></div>`)
+      .join('');
+  }
+
+  function describeTile(tile) {
+    if (!tile) return 'Hover over the map to inspect a tile.';
+    const parts = [];
+    parts.push(`<strong>${TERRAIN_LABELS[tile.terrain]}</strong> at (${tile.x}, ${tile.y})`);
+    const meters = elevationToMeters(tile.elevation);
+    if (meters >= 0) parts.push(`Elevation ≈ ${meters} m`);
+    parts.push(`Rainfall ≈ ${moistureToRainfallMm(tile.moisture).toLocaleString()} mm/yr`);
+    parts.push(`Avg temp ≈ ${tile.temperature.toFixed(1)}°C`);
+    if (tile.resource) parts.push(`Resource: <strong>${tile.resource.name}</strong>`);
+    return parts.join('<br>');
+  }
+
+  canvas.addEventListener('mousemove', (ev) => {
+    if (!world) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = Math.floor(((ev.clientX - rect.left) * scaleX) / TILE_PX);
+    const y = Math.floor(((ev.clientY - rect.top) * scaleY) / TILE_PX);
+    tileInfo.innerHTML = describeTile(tileAt(world, x, y));
+  });
+
+  canvas.addEventListener('mouseleave', () => {
+    tileInfo.textContent = 'Hover over the map to inspect a tile.';
+  });
+
+  generateBtn.addEventListener('click', () => {
+    const seed = seedInput.value.trim() || randomSeedString();
+    generate(seed);
+  });
+
+  randomBtn.addEventListener('click', () => generate(randomSeedString()));
+
+  seedInput.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') generateBtn.click();
+  });
+
+  viewSelect.addEventListener('change', () => {
+    if (world) refreshView();
+  });
+
+  generate(randomSeedString());
+})();
+</script>
+</body>
+</html>

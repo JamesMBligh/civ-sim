@@ -42,6 +42,17 @@ python3 -m http.server 8000
 # then visit http://localhost:8000
 ```
 
+## Built version & GitHub Pages
+
+`node build.js` bundles the app into a single self-contained
+`docs/index.html`. A GitHub Actions workflow
+(`.github/workflows/build-docs.yml`) reruns the build on every push and
+commits the result if it changed, so `/docs` always tracks the source.
+
+To publish: repository **Settings → Pages → Build and deployment**, set
+Source to *Deploy from a branch*, pick your branch and the `/docs`
+folder.
+
 ## Controls
 
 - **Seed** — type a seed and press Generate to recreate a specific island.
@@ -70,6 +81,7 @@ python3 -m http.server 8000
 | `js/world.js` | World state container and generation pipeline |
 | `js/render.js` | Canvas rendering (terrain / elevation / moisture) |
 | `js/main.js` | UI wiring |
+| `build.js` | Bundles everything into `docs/index.html` for GitHub Pages |
 
 ## Roadmap
 
