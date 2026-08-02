@@ -61,6 +61,7 @@ function createSettlement(world, rng, x, y, pop, tribeId) {
     foundedYear: world.year || 0,
   };
   world.settlements.push(settlement);
+  world.networkDirty = true; // a new place reshapes the trade network
   return settlement;
 }
 
@@ -117,6 +118,26 @@ function settlementScore(world, x, y) {
   };
   if (!(t in BASE)) return -Infinity; // water, mountains, peaks: no camps
   let score = BASE[t];
+
+  // Economic geography: harbors, fords, confluences and river mouths are
+  // reasons for a place to exist; so are workable mines and the traffic
+  // of existing trade routes (crossroads attract settlement).
+  if (world.siteAccess) score += world.siteAccess[i] * 1.4;
+  if (world.routeFlow) score += Math.min(3, world.routeFlow[i] * 0.12);
+  if (world.depositSurface) {
+    let mines = 0;
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+        const ni = ny * size + nx;
+        const res = resources[ni];
+        if (res && DEPLETABLE.has(res.id) && world.depositSurface[ni] > 0) mines++;
+      }
+    }
+    score += Math.min(3.6, mines * 1.2);
+  }
 
   for (let dy = -3; dy <= 3; dy++) {
     for (let dx = -3; dx <= 3; dx++) {

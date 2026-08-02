@@ -42,7 +42,14 @@ const TECHS = {
   raiding: { name: 'Organised Raiding', cost: 70, category: 'military', prereqs: [] },
   warriors: { name: 'Professional Warriors', cost: 240, category: 'military', prereqs: ['raiding'] },
   fortifications: { name: 'Fortifications', cost: 320, category: 'military', prereqs: ['masonry', 'warriors'] },
+  bridges: { name: 'Bridges', cost: 240, category: 'trade', prereqs: ['masonry'] },
+  roads: { name: 'Roads', cost: 300, category: 'trade', prereqs: ['masonry'] },
+  deep_mining: { name: 'Deep Mining', cost: 380, category: 'learning', prereqs: ['iron_working'] },
 };
+
+// Techs that reshape the movement-cost surface or resource reach: their
+// discovery forces a trade-network rebuild.
+const NETWORK_TECHS = new Set(['fishing', 'boats', 'roads', 'bridges', 'deep_mining']);
 
 function tribeEra(tribe) {
   const t = tribe.progress.techs;
@@ -70,7 +77,10 @@ function computeResourceAccess(world) {
       const res = world.resources[i];
       if (!res || owner[i] < 0) continue;
       const tribe = world.tribes[owner[i]];
-      if (tribe && tribe.alive) tribe.resourceAccess.add(res.id);
+      if (!tribe || !tribe.alive) continue;
+      // A worked-out deposit grants nothing until deep mining reopens it.
+      if (world.depositSurface && !depositActive(world, i, tribe)) continue;
+      tribe.resourceAccess.add(res.id);
     }
   }
 
@@ -84,8 +94,11 @@ function computeResourceAccess(world) {
         const nx = band.x + dx;
         const ny = band.y + dy;
         if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
-        const res = world.resources[ny * size + nx];
-        if (res) tribe.resourceAccess.add(res.id);
+        const ni = ny * size + nx;
+        const res = world.resources[ni];
+        if (!res) continue;
+        if (world.depositSurface && !depositActive(world, ni, tribe)) continue;
+        tribe.resourceAccess.add(res.id);
       }
     }
   }
@@ -183,6 +196,7 @@ function updateKnowledge(world, tribe, pop, rng, seasonFactor) {
       p.pools.tech -= cost;
       const eraBefore = tribeEra(tribe);
       p.techs.add(p.target);
+      if (NETWORK_TECHS.has(p.target)) world.networkDirty = true;
       events.push(`${tribe.name} mastered ${TECHS[p.target].name}.`);
       const eraAfter = tribeEra(tribe);
       if (eraAfter !== eraBefore) {
@@ -215,6 +229,7 @@ function diffuseTechs(world, rng) {
         if (rng.random() < pAdopt) {
           const eraBefore = tribeEra(to);
           to.progress.techs.add(id);
+          if (NETWORK_TECHS.has(id)) world.networkDirty = true;
           events.push(`${to.name} learned ${TECHS[id].name} from ${from.name}.`);
           if (tribeEra(to) !== eraBefore) {
             events.push(`${to.name} entered the ${ERA_LABELS[tribeEra(to)]}.`);

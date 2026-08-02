@@ -76,6 +76,35 @@ unfold. Full design in `design/tribe-evolution.md`.
   on traits; art and philosophy advance in stages that echo through
   the chronicle.
 
+### Economic geography
+
+The island has a movement-cost surface (cheap plains, costly hills,
+impassable peaks — reshaped by Boats, Bridges and Roads), and the
+economy lives on it:
+
+- **Settlements site themselves for real reasons** — harbors, fords,
+  confluences, river mouths, workable mines and route crossroads all
+  attract founding, ending the old evenly-spaced pattern.
+- **Trade routes** are cheapest paths between settlements (internal
+  and between trading peoples). Early routes hug rivers and coasts;
+  once Roads and Bridges arrive, overland paths take over — the river
+  age gives way to the road age.
+- **Tracks and roads**: sustained traffic wears tracks into the land
+  (and they grass over if traffic stops); tribes with the Roads tech
+  pave their busiest tracks at a rate set by discipline. Roads are
+  visible on the satellite view (toggleable) and cheapen movement for
+  everyone.
+- **Living economies**: settlements earn trade, market (through-
+  traffic) and mine income; prosperous towns grow faster and beyond
+  their fields, while towns that lose their route or their mine
+  shrink toward abandonment.
+- **Finite mines**: metal deposits have surface and deep tiers.
+  Surface veins run dry (~80–200 years of working); the town sags and
+  the mineral view greys the deposit out — until Deep Mining reopens
+  the old workings.
+- The **Trade** view draws the route network flow-weighted (gold
+  internal, cyan between peoples) over roads and tracks.
+
 The **Development** view colours each territory by its tribe's era;
 the tribes panel shows era badges and posture glyphs (⚔ military,
 ⚖ trade, 📜 learning), and clicking a tribe opens a full inspector —
@@ -146,6 +175,8 @@ folder.
 | `js/resources.js` | Terrain-aware resource placement |
 | `js/world.js` | World state container and generation pipeline |
 | `js/render.js` | Canvas rendering, camera (zoom/pan) and map layers |
+| `js/geography.js` | Movement-cost surface, site features (harbors, fords), A* |
+| `js/economy.js` | Trade routes, settlement economies, roads, mineral depletion |
 | `js/traits.js` | Nine traits, archetypes, posture triangle, drift |
 | `js/tech.js` | Tech tree, eras, knowledge pools, discovery & diffusion |
 | `js/tribes.js` | Tribes (social), bands (nomadic) & settlements (place) |

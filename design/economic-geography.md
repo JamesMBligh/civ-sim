@@ -187,21 +187,14 @@ Each phase is independently shippable and testable headlessly
 (settlement-site distributions, route counts, road km over time,
 deposit lifecycles) with the usual determinism guarantees.
 
-## 8. Open questions
+## 8. Resolved decisions
 
-1. **Roads: emergent, deliberate, or both?** Proposal above is both
-   (tracks emerge, roads are built). Pure emergence is prettier;
-   deliberate building gives discipline/governance a lever. Confirm
-   the hybrid.
-2. **Should renewables deplete too?** Proposed: not yet — minerals
-   only, to keep this phase focused.
-3. **Internal trade**: proposed yes (same-tribe routes) since most
-   real exchange was domestic, and it makes single-tribe islands
-   interesting. Confirm.
-4. **Trade view**: separate map view, or an overlay toggle on
-   satellite (like resource/settlement markers)? Proposal: routes on
-   a dedicated view; tracks/roads always visible on satellite since
-   they're physical.
-5. **Ports and sea lanes**: worth including coastal shipping from
-   phase 2 (Boats already exists), or defer open-sea Sailing to a
-   later maritime chapter?
+1. **Roads**: hybrid confirmed — tracks emerge from use, roads are
+   deliberately built (discipline/governance lever).
+2. **Renewables**: do not deplete in this phase; minerals only.
+3. **Internal trade**: yes — same-tribe routes are first-class.
+4. **Views**: dedicated Trade view for route flows, plus a roads
+   toggle on the satellite view (Google Maps style, default on).
+5. **Sea lanes**: coastal shipping ships now (via Boats);
+   open-sea Sailing and inter-island trade/invasion deferred to a
+   later maritime chapter.

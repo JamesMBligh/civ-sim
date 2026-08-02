@@ -299,6 +299,7 @@ function conquerSettlement(world, winner, loser, rel, log) {
 
   target.tribeId = winner.id;
   target.assimilatingUntil = world.year + Math.round(30 + 60 * loser.traits.cohesion);
+  world.networkDirty = true; // trade reroutes around the new border
   log(`${winner.name} conquered ${target.name}; its people now answer to new masters.`);
   rel.grievances = Math.min(5, rel.grievances + 2);
 
