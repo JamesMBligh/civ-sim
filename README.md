@@ -112,6 +112,10 @@ folder.
     gold, silver, lead, clay and salt deposits
 - **Hover** the map to inspect any tile (terrain, elevation, moisture,
   resource).
+- **Zoom** from 1× to 5× with the mouse wheel (magnifies toward the
+  cursor) or the −/+ buttons; **drag** the map to pan when zoomed in,
+  and **Reset** returns to the whole island. At 2.5× and above,
+  individual settlements are labelled with their own names.
 
 ## Code layout
 
@@ -123,7 +127,7 @@ folder.
 | `js/rivers.js` | Downhill river tracing with lake fill-and-spill |
 | `js/resources.js` | Terrain-aware resource placement |
 | `js/world.js` | World state container and generation pipeline |
-| `js/render.js` | Canvas rendering (terrain / elevation / moisture) |
+| `js/render.js` | Canvas rendering, camera (zoom/pan) and map layers |
 | `js/tribes.js` | Tribes (social) & settlements (place): founding, naming, allegiance |
 | `js/sim.js` | Yearly simulation: food, growth, expansion, influence |
 | `js/main.js` | UI wiring |

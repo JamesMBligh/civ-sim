@@ -16,8 +16,13 @@
   const tribesSection = document.getElementById('tribes-section');
   const tribesPanel = document.getElementById('tribes-panel');
   const eventsLog = document.getElementById('events-log');
+  const zoomInBtn = document.getElementById('zoom-in-btn');
+  const zoomOutBtn = document.getElementById('zoom-out-btn');
+  const zoomResetBtn = document.getElementById('zoom-reset-btn');
+  const zoomLevelEl = document.getElementById('zoom-level');
 
   let world = null;
+  let camera = createCamera();
 
   function generate(seed) {
     const t0 = performance.now();
@@ -27,6 +32,7 @@
     simulateBtn.textContent = 'Found tribes & simulate 10 years';
     tribesSection.style.display = 'none';
     if (viewSelect.value === 'communities') viewSelect.value = 'satellite';
+    camera = createCamera();
     refreshView();
     renderStats(ms);
   }
@@ -72,10 +78,51 @@
       .join('');
   }
 
+  // Full refresh: repaints the tile layer too (world or simulation changed).
   function refreshView() {
     const view = viewSelect.value;
-    renderWorld(world, canvas, view);
+    renderWorld(world, canvas, view, camera, true);
     renderLegends(view);
+    updateZoomUI();
+  }
+
+  // Cheap refresh for panning and zooming: reuses the cached tile layer.
+  function redraw() {
+    renderWorld(world, canvas, viewSelect.value, camera, false);
+    updateZoomUI();
+  }
+
+  function updateZoomUI() {
+    zoomLevelEl.textContent = `${camera.zoom.toFixed(1)}×`;
+    zoomOutBtn.disabled = camera.zoom <= MIN_ZOOM;
+    zoomInBtn.disabled = camera.zoom >= MAX_ZOOM;
+    canvas.classList.toggle('zoomed', camera.zoom > MIN_ZOOM);
+  }
+
+  // Zoom about a fixed point on screen (the cursor, or the view centre),
+  // so whatever you're looking at stays put.
+  function zoomBy(factor, anchorScreen) {
+    const before = anchorScreen
+      ? screenToTile(world, camera, anchorScreen.x, anchorScreen.y)
+      : null;
+    camera.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, camera.zoom * factor));
+    clampCamera(world, camera);
+    if (before) {
+      const after = screenToTile(world, camera, anchorScreen.x, anchorScreen.y);
+      camera.cx += before.x - after.x;
+      camera.cy += before.y - after.y;
+      clampCamera(world, camera);
+    }
+    redraw();
+  }
+
+  // Pointer position in canvas pixels (the canvas is scaled by CSS).
+  function canvasPoint(ev) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (ev.clientX - rect.left) * (canvas.width / rect.width),
+      y: (ev.clientY - rect.top) * (canvas.height / rect.height),
+    };
   }
 
   function terrainSwatchRows() {
@@ -195,18 +242,54 @@
     return parts.join('<br>');
   }
 
+  let panning = null;
+
   canvas.addEventListener('mousemove', (ev) => {
     if (!world) return;
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const x = Math.floor(((ev.clientX - rect.left) * scaleX) / TILE_PX);
-    const y = Math.floor(((ev.clientY - rect.top) * scaleY) / TILE_PX);
-    tileInfo.innerHTML = describeTile(tileAt(world, x, y));
+    const p = canvasPoint(ev);
+
+    if (panning) {
+      const pxPerTile = screenPxPerTile(world, camera);
+      camera.cx = panning.camX + (panning.x - p.x) / pxPerTile;
+      camera.cy = panning.camY + (panning.y - p.y) / pxPerTile;
+      clampCamera(world, camera);
+      redraw();
+      return;
+    }
+
+    const t = screenToTile(world, camera, p.x, p.y);
+    tileInfo.innerHTML = describeTile(tileAt(world, Math.floor(t.x), Math.floor(t.y)));
   });
+
+  canvas.addEventListener('mousedown', (ev) => {
+    if (!world || camera.zoom <= MIN_ZOOM) return;
+    const p = canvasPoint(ev);
+    panning = { x: p.x, y: p.y, camX: camera.cx, camY: camera.cy };
+    canvas.classList.add('panning');
+    ev.preventDefault();
+  });
+
+  window.addEventListener('mouseup', () => {
+    panning = null;
+    canvas.classList.remove('panning');
+  });
+
+  canvas.addEventListener('wheel', (ev) => {
+    if (!world) return;
+    ev.preventDefault();
+    const factor = ev.deltaY < 0 ? 1.2 : 1 / 1.2;
+    zoomBy(factor, canvasPoint(ev));
+  }, { passive: false });
 
   canvas.addEventListener('mouseleave', () => {
     tileInfo.textContent = 'Hover over the map to inspect a tile.';
+  });
+
+  zoomInBtn.addEventListener('click', () => zoomBy(1.5));
+  zoomOutBtn.addEventListener('click', () => zoomBy(1 / 1.5));
+  zoomResetBtn.addEventListener('click', () => {
+    camera = createCamera();
+    redraw();
   });
 
   generateBtn.addEventListener('click', () => {
