@@ -207,20 +207,18 @@ function updateUnity(world, tribe) {
   const digesting = settlements.some((s) =>
     s.assimilatingUntil && world.year < s.assimilatingUntil);
   if (!digesting && over === 0) {
-    const recovery = 0.0015 *
+    const recovery = PARAMS.unityRecovery *
       (0.5 + 0.5 * tribe.traits.cohesion) *
       (0.5 + 0.5 * tribe.traits.discipline);
     tribe.unity = Math.min(1, tribe.unity + recovery);
   }
 }
 
-const CIVIL_WAR_UNITY = 0.4;
-
 function checkCivilWar(world, tribe, rng, log) {
   const settlements = tribeSettlements(world, tribe.id);
-  if (settlements.length < 3 || (tribe.unity ?? 1) >= CIVIL_WAR_UNITY) return;
+  if (settlements.length < 3 || (tribe.unity ?? 1) >= PARAMS.civilWarUnity) return;
 
-  const p = 0.1 * ((CIVIL_WAR_UNITY - tribe.unity) / CIVIL_WAR_UNITY) *
+  const p = 0.1 * ((PARAMS.civilWarUnity - tribe.unity) / PARAMS.civilWarUnity) *
     (1.5 - tribe.traits.discipline);
   if (rng.random() >= p) return;
 
@@ -319,7 +317,7 @@ function updateBands(world, tribe, rng, seasonFactor, log) {
     // Forager demography: very slow growth toward a low wild ceiling —
     // realistic hunter-gatherer rates (~0.1-0.3 %/yr).
     const cap = bandCapacity(world, band) * seasonFactor;
-    const r = 0.0025 * varianceRoll(rng, tribe.traits);
+    const r = PARAMS.foragerGrowth * varianceRoll(rng, tribe.traits);
     band.pop = Math.max(0, band.pop + r * band.pop * (1 - band.pop / cap));
 
     if (band.pop > 100) {
@@ -360,7 +358,7 @@ function updateSettlements(world, tribe, rng, seasonFactor, log) {
     const pros = settlementProsperity(world, s);
     const cap = Math.max(20,
       settlementCapacity(world, s, tribe) * seasonFactor * pros.capBoost);
-    let r = 0.008 * stability * tribeFactor * pros.growth *
+    let r = PARAMS.farmerGrowth * stability * tribeFactor * pros.growth *
       varianceRoll(rng, tribe.traits);
     if (s.assimilatingUntil) {
       if (world.year < s.assimilatingUntil) {
@@ -381,7 +379,8 @@ function updateSettlements(world, tribe, rng, seasonFactor, log) {
   if (settlements.length < maxSettlements(tribe)) {
     for (const s of settlements) {
       const landCap = settlementCapacity(world, s, tribe);
-      if (s.pop < 1100 || s.pop < landCap * 0.45) continue;
+      if (s.pop < PARAMS.settlementSplitPop ||
+          s.pop < landCap * PARAMS.splitCapFraction) continue;
       const site = findDaughterSite(world, s, rng);
       if (!site) continue;
       const migrants = Math.round(s.pop * 0.3);
@@ -450,10 +449,10 @@ function simulateYear(world) {
   const seasonRoll = rng.random();
   let harsh = false;
   let seasonFactor = 1;
-  if (seasonRoll < 0.15) {
+  if (seasonRoll < PARAMS.harshWinterChance) {
     harsh = true;
     log('A harsh winter gripped the island; food ran short everywhere.');
-  } else if (seasonRoll > 0.85) {
+  } else if (seasonRoll > 1 - PARAMS.mildYearChance) {
     seasonFactor = 1.2;
     log('A mild year with rich harvests of forage and game.');
   }
@@ -464,7 +463,7 @@ function simulateYear(world) {
   const sinceNetwork = year - (world.lastNetworkYear || 0);
   if (world.settlements.length > 0 &&
       (!world.routes || (world.networkDirty && sinceNetwork >= 2) ||
-        sinceNetwork >= NETWORK_INTERVAL)) {
+        sinceNetwork >= PARAMS.networkInterval)) {
     updateTradeNetwork(world);
     computeSettlementIncome(world);
     world.networkDirty = false;
@@ -482,7 +481,8 @@ function simulateYear(world) {
     // Harsh winters hit harder without stores; pottery softens the blow.
     let tribeSeason = seasonFactor;
     if (harsh) {
-      tribeSeason = tribe.progress.techs.has('pottery') ? 0.85 : 0.75;
+      tribeSeason = Math.min(1, PARAMS.harshWinterFactor +
+        (tribe.progress.techs.has('pottery') ? 0.1 : 0));
       nudgeTrait(tribe, 'cohesion', 0.002); // hardship binds
     }
 

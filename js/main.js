@@ -459,6 +459,79 @@
     if (ev.key === 'Enter') generateBtn.click();
   });
 
+  // --- Parameters tab -------------------------------------------------------
+
+  const tabWorld = document.getElementById('tab-world');
+  const tabParams = document.getElementById('tab-params');
+  const tabBtnWorld = document.getElementById('tab-btn-world');
+  const tabBtnParams = document.getElementById('tab-btn-params');
+  const paramsPanel = document.getElementById('params-panel');
+
+  function selectTab(which) {
+    const params = which === 'params';
+    tabWorld.style.display = params ? 'none' : '';
+    tabParams.style.display = params ? '' : 'none';
+    tabBtnWorld.classList.toggle('active', !params);
+    tabBtnParams.classList.toggle('active', params);
+  }
+  tabBtnWorld.addEventListener('click', () => selectTab('world'));
+  tabBtnParams.addEventListener('click', () => selectTab('params'));
+
+  // Format a default so 0.0015 doesn't render as 0.001500...
+  function fmtParam(v) {
+    return String(parseFloat(v.toPrecision(6)));
+  }
+
+  function renderParams() {
+    const groups = [];
+    const byGroup = new Map();
+    for (const def of PARAM_DEFS) {
+      if (!byGroup.has(def.group)) {
+        byGroup.set(def.group, []);
+        groups.push(def.group);
+      }
+      byGroup.get(def.group).push(def);
+    }
+
+    paramsPanel.innerHTML = groups.map((group) =>
+      `<h2>${group}</h2>` + byGroup.get(group).map((def) =>
+        `<div class="param-row">` +
+        `<label for="param-${def.key}">${def.label}${def.worldgen ? ' ⟳' : ''}` +
+        (def.hint ? `<span class="hint">${def.hint}</span>` : '') +
+        `</label>` +
+        `<input type="number" id="param-${def.key}" data-key="${def.key}"` +
+        ` value="${fmtParam(PARAMS[def.key])}" min="${def.min}" max="${def.max}" step="${def.step}">` +
+        `</div>`).join('')
+    ).join('');
+
+    for (const input of paramsPanel.querySelectorAll('input[data-key]')) {
+      const def = PARAM_DEFS.find((d) => d.key === input.dataset.key);
+      const markChanged = () =>
+        input.classList.toggle('changed', PARAMS[def.key] !== def.def);
+      markChanged();
+      input.addEventListener('change', () => {
+        const v = parseFloat(input.value);
+        if (!Number.isFinite(v)) {
+          input.value = fmtParam(PARAMS[def.key]);
+          return;
+        }
+        PARAMS[def.key] = Math.max(def.min, Math.min(def.max, v));
+        input.value = fmtParam(PARAMS[def.key]);
+        markChanged();
+        // Movement/trade parameters reshape the network next tick.
+        if (world) world.networkDirty = true;
+      });
+    }
+  }
+
+  document.getElementById('params-reset').addEventListener('click', () => {
+    resetParams();
+    renderParams();
+    if (world) world.networkDirty = true;
+  });
+
+  renderParams();
+
   viewSelect.addEventListener('change', () => {
     if (world) refreshView();
   });

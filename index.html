@@ -184,6 +184,53 @@
   #events-log .ev-year { color: var(--accent); font-weight: 600; }
   .toggle-row { cursor: pointer; user-select: none; }
   .toggle-row input { accent-color: var(--accent); margin-right: 2px; }
+  .tab-bar {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--panel-border);
+    padding-bottom: 8px;
+  }
+  .tab {
+    flex: 1;
+    background: transparent;
+    border: 1px solid var(--panel-border);
+    color: var(--text-dim);
+    font-weight: 500;
+    padding: 6px 0;
+  }
+  .tab.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #08131b;
+    font-weight: 600;
+  }
+  .params-note {
+    color: var(--text-dim);
+    font-size: 12px;
+    line-height: 1.4;
+    margin-bottom: 10px;
+  }
+  .param-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0;
+  }
+  .param-row label { flex: 1; font-size: 12px; color: var(--text); }
+  .param-row label .hint { display: block; color: var(--text-dim); font-size: 11px; }
+  .param-row input {
+    width: 74px;
+    background: var(--bg);
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 12px;
+    text-align: right;
+  }
+  .param-row input.changed { border-color: var(--accent); }
+  #params-reset { margin-top: 12px; width: 100%; }
   .tribe-row { cursor: pointer; border-radius: 4px; padding-left: 4px; }
   .tribe-row:hover { background: rgba(255,255,255,0.05); }
   .tribe-row.selected { background: rgba(79,163,209,0.15); }
@@ -270,6 +317,11 @@
     <canvas id="map-canvas"></canvas>
   </div>
   <aside>
+    <div class="tab-bar">
+      <button id="tab-btn-world" class="tab active">World</button>
+      <button id="tab-btn-params" class="tab">Parameters</button>
+    </div>
+    <div id="tab-world">
     <h2>Inspect</h2>
     <div id="tile-info">Hover over the map to inspect a tile.</div>
     <div id="tribes-section" style="display: none">
@@ -285,6 +337,13 @@
     <div id="resource-legend"></div>
     <h2>Statistics</h2>
     <div id="stats"></div>
+    </div>
+    <div id="tab-params" style="display: none">
+      <div class="params-note">Values apply as the simulation continues.
+        Entries marked ⟳ take effect when a new world is generated.</div>
+      <div id="params-panel"></div>
+      <button id="params-reset" class="secondary">Reset to defaults</button>
+    </div>
   </aside>
 </main>
 <script src="js/rng.js"></script>
@@ -292,6 +351,7 @@
 <script src="js/terrain.js"></script>
 <script src="js/rivers.js"></script>
 <script src="js/resources.js"></script>
+<script src="js/params.js"></script>
 <script src="js/world.js"></script>
 <script src="js/geography.js"></script>
 <script src="js/traits.js"></script>

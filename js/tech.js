@@ -172,9 +172,9 @@ function updateKnowledge(world, tribe, pop, rng, seasonFactor) {
     (0.7 + 0.3 * (tribe.unity ?? 1));
   const prosperity = tribe.tradePartners > 0 ? 1.3 : 1.0;
 
-  p.pools.tech += 0.15 * surplus * (2 * posture.learning) * (0.5 + traits.acumen);
-  p.pools.art += 0.15 * surplus * traits.artistry * (1 + 0.5 * (1 - traits.discipline)) * prosperity;
-  p.pools.philosophy += 0.15 * surplus * traits.contemplation * (1 - traits.dogmatism);
+  p.pools.tech += PARAMS.knowledgeRate * surplus * (2 * posture.learning) * (0.5 + traits.acumen);
+  p.pools.art += PARAMS.knowledgeRate * surplus * traits.artistry * (1 + 0.5 * (1 - traits.discipline)) * prosperity;
+  p.pools.philosophy += PARAMS.knowledgeRate * surplus * traits.contemplation * (1 - traits.dogmatism);
 
   // Stage ladders.
   while (p.artStage < 3 && p.pools.art >= ART_THRESHOLDS[p.artStage]) {
@@ -225,7 +225,7 @@ function diffuseTechs(world, rng) {
       if (!from || !to || !from.alive || !to.alive) continue;
       for (const id of from.progress.techs) {
         if (!techAvailable(world, to, id)) continue;
-        const pAdopt = 0.015 * mult * (1 - to.traits.dogmatism) * (1 - 0.5 * from.traits.cohesion);
+        const pAdopt = PARAMS.diffusionRate * mult * (1 - to.traits.dogmatism) * (1 - 0.5 * from.traits.cohesion);
         if (rng.random() < pAdopt) {
           const eraBefore = tribeEra(to);
           to.progress.techs.add(id);

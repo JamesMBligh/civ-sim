@@ -263,7 +263,7 @@ function resolveWarYear(world, a, b, rel, rng, log) {
 
   // Raid damage falls on the loser's people, and the year's outcome
   // accumulates into the war score that peace terms are settled by.
-  const lossRate = 0.01 * ratio;
+  const lossRate = PARAMS.raidLossRate * ratio;
   damageTribe(world, loser, lossRate, rng);
   rel.grievances = Math.min(5, rel.grievances + 0.7);
   rel.warScore = (rel.warScore || 0) + (winner === a ? 1 : -1) * (ratio - 1);
@@ -277,7 +277,7 @@ function resolveWarYear(world, a, b, rel, rng, log) {
   // edge, the likelier the fall.
   const loserSettlements = tribeSettlements(world, loser.id);
   if (rel.warYears >= 2 && ratio > 1.4 && canConquer(winner, loser) &&
-      loserSettlements.length > 0 && rng.random() < 0.15 * ratio) {
+      loserSettlements.length > 0 && rng.random() < PARAMS.conquestChance * ratio) {
     conquerSettlement(world, winner, loser, rel, log);
   }
 }
@@ -370,8 +370,8 @@ function diplomaticEvent(world, a, b, rel, rng, log) {
 
   // Hot tempers and low discipline breed incidents; traders and
   // philosophers breed goodwill.
-  const pIncident = 0.005 + 0.012 * avgAggression + 0.008 * (1 - avgDiscipline);
-  const pGoodwill = 0.005 + 0.012 * avgMercantile + 0.006 * avgContemplation;
+  const pIncident = PARAMS.incidentBase + 0.012 * avgAggression + 0.008 * (1 - avgDiscipline);
+  const pGoodwill = PARAMS.goodwillBase + 0.012 * avgMercantile + 0.006 * avgContemplation;
 
   const roll = rng.random();
   if (roll < pIncident) {

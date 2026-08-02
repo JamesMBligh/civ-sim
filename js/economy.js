@@ -3,7 +3,7 @@
 // use, roads built on purpose, and mineral deposits that run dry.
 // See design/economic-geography.md §3-§5.
 
-const NETWORK_INTERVAL = 5; // years between full route recomputations
+// Route recompute interval lives in PARAMS.networkInterval.
 
 // --- Trade network -------------------------------------------------------------
 
@@ -83,10 +83,10 @@ function updateTradeNetwork(world) {
     const ta = world.tribes[a.tribeId];
     const tb = world.tribes[b.tribeId];
     const grid = tribeHasBoatsPair(ta, tb) ? world.costBoats : world.costWalk;
-    const found = findPath(world, grid, a.y * size + a.x, b.y * size + b.x, 120);
+    const found = findPath(world, grid, a.y * size + a.x, b.y * size + b.x, PARAMS.routeMaxCost);
     if (!found) continue;
     // Flow: how much the two ends have to exchange, damped by distance.
-    const routeFlow = Math.sqrt(Math.min(a.pop, b.pop)) / (1 + found.cost / 25);
+    const routeFlow = Math.sqrt(Math.min(a.pop, b.pop)) / (1 + found.cost / PARAMS.flowDistanceDamp);
     if (routeFlow < 1) continue;
     routes.push({
       aId: a.id, bId: b.id, cost: found.cost, path: found.path, flow: routeFlow,
@@ -105,7 +105,7 @@ function updateTradeNetwork(world) {
   // stops.
   const wear = world.wear;
   const roads = world.roadLevel;
-  const TRACK_THRESHOLD = 35;
+  const TRACK_THRESHOLD = PARAMS.trackThreshold;
   for (let i = 0; i < wear.length; i++) {
     wear[i] = wear[i] * 0.55 + flow[i];
     if (isWater(world.terrain[i])) {
@@ -142,7 +142,7 @@ function computeSettlementIncome(world) {
     const a = income.get(route.aId);
     const b = income.get(route.bId);
     // External exchange is worth more than moving goods internally.
-    const value = route.flow * (route.external ? 1.5 : 1);
+    const value = route.flow * (route.external ? PARAMS.externalTradeBonus : 1);
     if (a) a.trade += value;
     if (b) b.trade += value;
 
@@ -153,7 +153,7 @@ function computeSettlementIncome(world) {
         const dx = (idx % size) - s.x;
         const dy = ((idx / size) | 0) - s.y;
         if (dx * dx + dy * dy <= 2) {
-          income.get(s.id).market += route.flow * 0.5;
+          income.get(s.id).market += route.flow * PARAMS.marketShare;
           break;
         }
       }
@@ -170,7 +170,8 @@ function buildRoads(world, tribe, log) {
   if (!tribe.progress.techs.has('roads') || !world.roadLevel) return;
   const { size } = world;
   const owner = world.influenceOwner;
-  const perYear = Math.round(1 + 2 * tribe.traits.discipline +
+  const perYear = Math.round(PARAMS.paveRateBase +
+    PARAMS.paveRateDiscipline * tribe.traits.discipline +
     (tribe.progress.governance !== 'chiefdom' ? 1 : 0));
 
   // Candidate tiles: this tribe's busy tracks — and, with the Bridges
@@ -182,7 +183,7 @@ function buildRoads(world, tribe, log) {
     // Only genuinely busy tiles are worth the work — this keeps braided
     // parallel paths from all being made permanent. Paving is reserved
     // for arterials, not every worn footpath.
-    if (world.wear[i] <= 75 || !owner || owner[i] !== tribe.id) continue;
+    if (world.wear[i] <= PARAMS.paveWearMin || !owner || owner[i] !== tribe.id) continue;
     if (world.roadLevel[i] === ROAD_TRACK) candidates.push(i);
     else if (world.roadLevel[i] === ROAD_FERRY && canBridge &&
              world.terrain[i] === TERRAIN.RIVER) {
@@ -222,8 +223,8 @@ function initDeposits(world, rng) {
   for (let i = 0; i < size * size; i++) {
     const res = resources[i];
     if (res && DEPLETABLE.has(res.id)) {
-      surface[i] = rng.int(80, 200);
-      deep[i] = rng.int(250, 600);
+      surface[i] = rng.int(PARAMS.depositSurfaceMin, PARAMS.depositSurfaceMax);
+      deep[i] = rng.int(PARAMS.depositDeepMin, PARAMS.depositDeepMax);
     }
   }
   world.depositSurface = surface;
