@@ -993,6 +993,7 @@ function tileAt(world, x, y) {
 const ROAD_NONE = 0;
 const ROAD_TRACK = 1;
 const ROAD_ROAD = 2;
+const ROAD_FERRY = 3; // an established water crossing or barge lane
 
 // --- Static site features ---------------------------------------------------
 // Properties of the map itself, computed once at worldgen: places where a
@@ -1107,9 +1108,13 @@ function buildCostGrid(world, hasBoats) {
     }
 
     // Physical infrastructure is usable by anyone who walks it. A road
-    // or bridge on a river tile is a crossing.
+    // on a river tile is a bridge; a ferry is an operated crossing —
+    // cheap for boat peoples, and it opens the water to everyone else.
     if (roads && roads[i] === ROAD_ROAD) c = Math.min(c, 0.5);
     else if (roads && roads[i] === ROAD_TRACK) c = Math.min(c, c * 0.75);
+    else if (roads && roads[i] === ROAD_FERRY) {
+      c = Math.min(c, hasBoats ? 0.35 : 1.5);
+    }
 
     cost[i] = c;
     if (c < minCost) minCost = c;
@@ -2522,16 +2527,33 @@ function updateTradeNetwork(world) {
   world.routeFlow = flow;
 
   // Wear: traffic marks the land. Old wear fades; sustained flow beats a
-  // track into existence, and a track that loses its traffic grasses over.
+  // track into existence, and a track that loses its traffic grasses
+  // over. Water never carries a track — busy water becomes a FERRY lane
+  // (a worked crossing or barge run), which likewise lapses if traffic
+  // stops.
   const wear = world.wear;
   const roads = world.roadLevel;
   const TRACK_THRESHOLD = 35;
   for (let i = 0; i < wear.length; i++) {
     wear[i] = wear[i] * 0.55 + flow[i];
-    if (roads[i] === ROAD_NONE && wear[i] > TRACK_THRESHOLD) {
-      roads[i] = ROAD_TRACK;
-    } else if (roads[i] === ROAD_TRACK && wear[i] < TRACK_THRESHOLD * 0.3) {
-      roads[i] = ROAD_NONE;
+    if (isWater(world.terrain[i])) {
+      // Sanity: water never carries a track, and only rivers carry
+      // bridges — anything else reverts to a ferry lane.
+      if (roads[i] === ROAD_TRACK ||
+          (roads[i] === ROAD_ROAD && world.terrain[i] !== TERRAIN.RIVER)) {
+        roads[i] = ROAD_FERRY;
+      }
+      if (roads[i] === ROAD_NONE && wear[i] > TRACK_THRESHOLD) {
+        roads[i] = ROAD_FERRY;
+      } else if (roads[i] === ROAD_FERRY && wear[i] < TRACK_THRESHOLD * 0.3) {
+        roads[i] = ROAD_NONE;
+      }
+    } else {
+      if (roads[i] === ROAD_NONE && wear[i] > TRACK_THRESHOLD) {
+        roads[i] = ROAD_TRACK;
+      } else if (roads[i] === ROAD_TRACK && wear[i] < TRACK_THRESHOLD * 0.3) {
+        roads[i] = ROAD_NONE;
+      }
     }
   }
 }
@@ -2579,13 +2601,18 @@ function buildRoads(world, tribe, log) {
   const perYear = Math.round(1 + 4 * tribe.traits.discipline +
     (tribe.progress.governance !== 'chiefdom' ? 1 : 0));
 
-  // Candidate tiles: this tribe's tracks, richest wear first.
+  // Candidate tiles: this tribe's busy tracks — and, with the Bridges
+  // tech, its busy river ferries, which get bridged. Richest wear first.
+  // (Nobody bridges a lake or the sea; those stay ferries.)
+  const canBridge = tribe.progress.techs.has('bridges');
   const candidates = [];
   for (let i = 0; i < size * size; i++) {
-    // Only genuinely busy tracks are worth paving — this keeps braided
+    // Only genuinely busy tiles are worth the work — this keeps braided
     // parallel paths from all being made permanent.
-    if (world.roadLevel[i] === ROAD_TRACK && world.wear[i] > 50 &&
-        owner && owner[i] === tribe.id) {
+    if (world.wear[i] <= 50 || !owner || owner[i] !== tribe.id) continue;
+    if (world.roadLevel[i] === ROAD_TRACK) candidates.push(i);
+    else if (world.roadLevel[i] === ROAD_FERRY && canBridge &&
+             world.terrain[i] === TERRAIN.RIVER) {
       candidates.push(i);
     }
   }
@@ -2594,10 +2621,7 @@ function buildRoads(world, tribe, log) {
   let built = 0;
   for (const i of candidates) {
     if (built >= perYear) break;
-    // Bridging a river tile needs the Bridges tech.
-    if (world.terrain[i] === TERRAIN.RIVER &&
-        !tribe.progress.techs.has('bridges')) continue;
-    world.roadLevel[i] = ROAD_ROAD;
+    world.roadLevel[i] = ROAD_ROAD; // on a river tile, this is a bridge
     built++;
   }
   if (built > 0 && !tribe.roadsStarted) {
@@ -3727,39 +3751,70 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
 
   const resourceView = view === 'minerals' || view === 'natural';
 
-  // Tracks and roads are physical infrastructure — drawn on the satellite
-  // view (toggleable, Google Maps style, default on) and the trade view.
+  // Tracks, roads, bridges and ferry lanes are physical infrastructure —
+  // drawn on the satellite view (toggleable, Google Maps style, default
+  // on) and the trade view. Each adjacent pair of infrastructure tiles
+  // is one segment, styled by what it actually is:
+  //   track  — faint brown (worn earth)
+  //   road   — solid brown (paved, on land)
+  //   bridge — stone grey (a road tile crossing a river)
+  //   ferry  — dashed blue (a worked water crossing or barge lane)
   if (world.roadLevel &&
       ((view === 'satellite' && overlays.roads !== false) || view === 'trade')) {
-    const { size } = world;
+    const { size, terrain, roadLevel } = world;
     const y0 = Math.max(0, Math.floor(top));
     const y1 = Math.min(size, Math.ceil(bottom));
     const x0 = Math.max(0, Math.floor(left));
     const x1 = Math.min(size, Math.ceil(right));
-    // Connect each road tile to its road neighbours east/south-ish so
-    // every segment is drawn exactly once.
     const HALF = [[1, 0], [0, 1], [1, 1], [-1, 1]];
-    for (let pass = 1; pass <= 2; pass++) { // tracks beneath roads
-      ctx.strokeStyle = pass === 2 ? 'rgba(96,72,46,0.95)' : 'rgba(126,102,70,0.5)';
-      ctx.lineWidth = pass === 2
-        ? Math.min(3.5, 1.2 * t.scale * TILE_PX * 0.25)
-        : Math.min(2.2, 0.8 * t.scale * TILE_PX * 0.25);
-      ctx.beginPath();
-      for (let y = y0; y < y1; y++) {
-        for (let x = x0; x < x1; x++) {
-          if (world.roadLevel[y * size + x] !== pass) continue;
-          for (const [dx, dy] of HALF) {
-            const nx = x + dx;
-            const ny = y + dy;
-            if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
-            if (world.roadLevel[ny * size + nx] < pass) continue;
-            ctx.moveTo(toScreenX(x), toScreenY(y));
-            ctx.lineTo(toScreenX(nx), toScreenY(ny));
-          }
+
+    const segments = { track: [], road: [], bridge: [], ferry: [] };
+    const category = (ia, ib) => {
+      const la = roadLevel[ia];
+      const lb = roadLevel[ib];
+      if (la === ROAD_FERRY || lb === ROAD_FERRY) return 'ferry';
+      const water = isWater(terrain[ia]) || isWater(terrain[ib]);
+      if (la === ROAD_ROAD && lb === ROAD_ROAD) return water ? 'bridge' : 'road';
+      return water ? 'ferry' : 'track';
+    };
+
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        const i = y * size + x;
+        if (roadLevel[i] === ROAD_NONE) continue;
+        for (const [dx, dy] of HALF) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+          const ni = ny * size + nx;
+          if (roadLevel[ni] === ROAD_NONE) continue;
+          segments[category(i, ni)].push(x, y, nx, ny);
         }
+      }
+    }
+
+    const wide = Math.min(3.5, 1.2 * t.scale * TILE_PX * 0.25);
+    const thin = Math.min(2.2, 0.8 * t.scale * TILE_PX * 0.25);
+    const STYLES = [
+      ['track', 'rgba(126,102,70,0.5)', thin, []],
+      ['ferry', 'rgba(120,185,220,0.8)', thin, [4, 3]],
+      ['road', 'rgba(96,72,46,0.95)', wide, []],
+      ['bridge', 'rgba(168,168,175,0.95)', wide, []],
+    ];
+    for (const [key, color, width, dash] of STYLES) {
+      const seg = segments[key];
+      if (!seg.length) continue;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.setLineDash(dash);
+      ctx.beginPath();
+      for (let k = 0; k < seg.length; k += 4) {
+        ctx.moveTo(toScreenX(seg[k]), toScreenY(seg[k + 1]));
+        ctx.lineTo(toScreenX(seg[k + 2]), toScreenY(seg[k + 3]));
       }
       ctx.stroke();
     }
+    ctx.setLineDash([]);
   }
 
   // Trade routes: flow-weighted lines, gold for internal exchange and
@@ -4209,6 +4264,8 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
         line('rgba(217,180,74,0.9)', 'Internal route (flow-weighted)') +
         line('rgba(95,201,232,0.9)', 'Route between peoples') +
         line('rgb(96,72,46)', 'Road') +
+        line('rgb(168,168,175)', 'Bridge') +
+        line('rgba(120,185,220,0.9)', 'Ferry / barge lane') +
         line('rgba(126,102,70,0.6)', 'Track (worn by use)');
       const routes = world.routes || [];
       const external = routes.filter((r) => r.external).length;

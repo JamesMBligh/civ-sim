@@ -99,16 +99,33 @@ function updateTradeNetwork(world) {
   world.routeFlow = flow;
 
   // Wear: traffic marks the land. Old wear fades; sustained flow beats a
-  // track into existence, and a track that loses its traffic grasses over.
+  // track into existence, and a track that loses its traffic grasses
+  // over. Water never carries a track — busy water becomes a FERRY lane
+  // (a worked crossing or barge run), which likewise lapses if traffic
+  // stops.
   const wear = world.wear;
   const roads = world.roadLevel;
   const TRACK_THRESHOLD = 35;
   for (let i = 0; i < wear.length; i++) {
     wear[i] = wear[i] * 0.55 + flow[i];
-    if (roads[i] === ROAD_NONE && wear[i] > TRACK_THRESHOLD) {
-      roads[i] = ROAD_TRACK;
-    } else if (roads[i] === ROAD_TRACK && wear[i] < TRACK_THRESHOLD * 0.3) {
-      roads[i] = ROAD_NONE;
+    if (isWater(world.terrain[i])) {
+      // Sanity: water never carries a track, and only rivers carry
+      // bridges — anything else reverts to a ferry lane.
+      if (roads[i] === ROAD_TRACK ||
+          (roads[i] === ROAD_ROAD && world.terrain[i] !== TERRAIN.RIVER)) {
+        roads[i] = ROAD_FERRY;
+      }
+      if (roads[i] === ROAD_NONE && wear[i] > TRACK_THRESHOLD) {
+        roads[i] = ROAD_FERRY;
+      } else if (roads[i] === ROAD_FERRY && wear[i] < TRACK_THRESHOLD * 0.3) {
+        roads[i] = ROAD_NONE;
+      }
+    } else {
+      if (roads[i] === ROAD_NONE && wear[i] > TRACK_THRESHOLD) {
+        roads[i] = ROAD_TRACK;
+      } else if (roads[i] === ROAD_TRACK && wear[i] < TRACK_THRESHOLD * 0.3) {
+        roads[i] = ROAD_NONE;
+      }
     }
   }
 }
@@ -156,13 +173,18 @@ function buildRoads(world, tribe, log) {
   const perYear = Math.round(1 + 4 * tribe.traits.discipline +
     (tribe.progress.governance !== 'chiefdom' ? 1 : 0));
 
-  // Candidate tiles: this tribe's tracks, richest wear first.
+  // Candidate tiles: this tribe's busy tracks — and, with the Bridges
+  // tech, its busy river ferries, which get bridged. Richest wear first.
+  // (Nobody bridges a lake or the sea; those stay ferries.)
+  const canBridge = tribe.progress.techs.has('bridges');
   const candidates = [];
   for (let i = 0; i < size * size; i++) {
-    // Only genuinely busy tracks are worth paving — this keeps braided
+    // Only genuinely busy tiles are worth the work — this keeps braided
     // parallel paths from all being made permanent.
-    if (world.roadLevel[i] === ROAD_TRACK && world.wear[i] > 50 &&
-        owner && owner[i] === tribe.id) {
+    if (world.wear[i] <= 50 || !owner || owner[i] !== tribe.id) continue;
+    if (world.roadLevel[i] === ROAD_TRACK) candidates.push(i);
+    else if (world.roadLevel[i] === ROAD_FERRY && canBridge &&
+             world.terrain[i] === TERRAIN.RIVER) {
       candidates.push(i);
     }
   }
@@ -171,10 +193,7 @@ function buildRoads(world, tribe, log) {
   let built = 0;
   for (const i of candidates) {
     if (built >= perYear) break;
-    // Bridging a river tile needs the Bridges tech.
-    if (world.terrain[i] === TERRAIN.RIVER &&
-        !tribe.progress.techs.has('bridges')) continue;
-    world.roadLevel[i] = ROAD_ROAD;
+    world.roadLevel[i] = ROAD_ROAD; // on a river tile, this is a bridge
     built++;
   }
   if (built > 0 && !tribe.roadsStarted) {

@@ -6,6 +6,7 @@
 const ROAD_NONE = 0;
 const ROAD_TRACK = 1;
 const ROAD_ROAD = 2;
+const ROAD_FERRY = 3; // an established water crossing or barge lane
 
 // --- Static site features ---------------------------------------------------
 // Properties of the map itself, computed once at worldgen: places where a
@@ -120,9 +121,13 @@ function buildCostGrid(world, hasBoats) {
     }
 
     // Physical infrastructure is usable by anyone who walks it. A road
-    // or bridge on a river tile is a crossing.
+    // on a river tile is a bridge; a ferry is an operated crossing —
+    // cheap for boat peoples, and it opens the water to everyone else.
     if (roads && roads[i] === ROAD_ROAD) c = Math.min(c, 0.5);
     else if (roads && roads[i] === ROAD_TRACK) c = Math.min(c, c * 0.75);
+    else if (roads && roads[i] === ROAD_FERRY) {
+      c = Math.min(c, hasBoats ? 0.35 : 1.5);
+    }
 
     cost[i] = c;
     if (c < minCost) minCost = c;

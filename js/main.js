@@ -314,6 +314,8 @@
         line('rgba(217,180,74,0.9)', 'Internal route (flow-weighted)') +
         line('rgba(95,201,232,0.9)', 'Route between peoples') +
         line('rgb(96,72,46)', 'Road') +
+        line('rgb(168,168,175)', 'Bridge') +
+        line('rgba(120,185,220,0.9)', 'Ferry / barge lane') +
         line('rgba(126,102,70,0.6)', 'Track (worn by use)');
       const routes = world.routes || [];
       const external = routes.filter((r) => r.external).length;
