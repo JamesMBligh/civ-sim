@@ -1,7 +1,13 @@
-// Canvas rendering: draws the world at a fixed pixel scale with three view
-// modes (terrain, elevation, moisture) and resource markers.
+// Canvas rendering. The world's tiles are painted once into an offscreen
+// base layer at native resolution; the visible canvas then shows a
+// camera-defined window onto that layer, magnified up to MAX_ZOOM.
+// Markers and labels are drawn afterwards in screen space so they stay
+// crisp and legible at every zoom level.
 
-const TILE_PX = 3;
+const TILE_PX = 3;          // base-layer pixels per tile at 1x
+const VIEW_PX = 768;        // logical size of the visible canvas
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 5;
 
 const TERRAIN_COLORS = {
   [TERRAIN.DEEP_OCEAN]: [16, 42, 74],
@@ -75,6 +81,56 @@ function hexToRgb(hex) {
   ];
 }
 
+// --- Camera ---------------------------------------------------------------
+// The camera is a magnification plus a centre point in tile coordinates.
+
+function createCamera() {
+  return { zoom: 1, cx: WORLD_SIZE / 2, cy: WORLD_SIZE / 2 };
+}
+
+function clampCamera(world, camera) {
+  camera.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, camera.zoom));
+  // Half the visible window, in tiles.
+  const half = world.size / camera.zoom / 2;
+  camera.cx = Math.max(half, Math.min(world.size - half, camera.cx));
+  camera.cy = Math.max(half, Math.min(world.size - half, camera.cy));
+  return camera;
+}
+
+// Maps between base-layer pixels and canvas pixels for the current camera.
+function cameraTransform(world, camera) {
+  const worldPx = world.size * TILE_PX;
+  const srcSize = worldPx / camera.zoom;
+  const srcX = Math.max(0, Math.min(worldPx - srcSize, camera.cx * TILE_PX - srcSize / 2));
+  const srcY = Math.max(0, Math.min(worldPx - srcSize, camera.cy * TILE_PX - srcSize / 2));
+  return { srcX, srcY, srcSize, scale: VIEW_PX / srcSize };
+}
+
+// Canvas pixel -> tile coordinate (fractional).
+function screenToTile(world, camera, screenX, screenY) {
+  const t = cameraTransform(world, camera);
+  return {
+    x: (screenX / t.scale + t.srcX) / TILE_PX,
+    y: (screenY / t.scale + t.srcY) / TILE_PX,
+  };
+}
+
+// How many canvas pixels one tile occupies at the current zoom.
+function screenPxPerTile(world, camera) {
+  return cameraTransform(world, camera).scale * TILE_PX;
+}
+
+// --- Base layer -----------------------------------------------------------
+// Painting 65k tiles is the expensive part, so the result is cached and
+// reused while panning and zooming. Callers pass rebuildBase = true after
+// the world or the simulation state changes.
+
+let baseLayer = { canvas: null, key: null };
+
+function invalidateBaseLayer() {
+  baseLayer.key = null;
+}
+
 function satelliteColor(world, x, y, i) {
   const t = world.terrain[i];
   let [r, g, b] = TERRAIN_COLORS[t] || [255, 0, 255];
@@ -90,13 +146,19 @@ function satelliteColor(world, x, y, i) {
   return [r, g, b];
 }
 
-function renderWorld(world, canvas, view = 'satellite') {
+function buildBaseLayer(world, view) {
   const { size } = world;
-  canvas.width = size * TILE_PX;
-  canvas.height = size * TILE_PX;
-  const ctx = canvas.getContext('2d');
+  const worldPx = size * TILE_PX;
 
-  const img = ctx.createImageData(canvas.width, canvas.height);
+  let canvas = baseLayer.canvas;
+  if (!canvas || canvas.width !== worldPx) {
+    canvas = document.createElement('canvas');
+    canvas.width = worldPx;
+    canvas.height = worldPx;
+    baseLayer.canvas = canvas;
+  }
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(worldPx, worldPx);
   const data = img.data;
 
   const resourceView = view === 'minerals' || view === 'natural';
@@ -166,7 +228,7 @@ function renderWorld(world, canvas, view = 'satellite') {
 
       // Fill the TILE_PX x TILE_PX block
       for (let py = 0; py < TILE_PX; py++) {
-        let p = ((y * TILE_PX + py) * canvas.width + x * TILE_PX) * 4;
+        let p = ((y * TILE_PX + py) * worldPx + x * TILE_PX) * 4;
         for (let px = 0; px < TILE_PX; px++) {
           data[p] = r; data[p + 1] = g; data[p + 2] = b; data[p + 3] = 255;
           p += 4;
@@ -176,28 +238,67 @@ function renderWorld(world, canvas, view = 'satellite') {
   }
 
   ctx.putImageData(img, 0, 0);
+  baseLayer.key = `${world.seed}|${view}`;
+  return canvas;
+}
+
+// --- Frame ----------------------------------------------------------------
+
+function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBase = true) {
+  camera = clampCamera(world, camera || createCamera());
+
+  const key = `${world.seed}|${view}`;
+  if (rebuildBase || baseLayer.key !== key) buildBaseLayer(world, view);
+
+  // Only resize when needed — assigning width clears and reallocates.
+  if (canvas.width !== VIEW_PX || canvas.height !== VIEW_PX) {
+    canvas.width = VIEW_PX;
+    canvas.height = VIEW_PX;
+  }
+  const ctx = canvas.getContext('2d');
+  const t = cameraTransform(world, camera);
+
+  // Tiles are meant to look like tiles — no smoothing when magnified.
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(baseLayer.canvas,
+    t.srcX, t.srcY, t.srcSize, t.srcSize,
+    0, 0, VIEW_PX, VIEW_PX);
+  ctx.imageSmoothingEnabled = true;
+
+  const toScreenX = (tileX) => ((tileX + 0.5) * TILE_PX - t.srcX) * t.scale;
+  const toScreenY = (tileY) => ((tileY + 0.5) * TILE_PX - t.srcY) * t.scale;
+
+  // Visible tile window, with a margin so markers straddling the edge
+  // still get drawn.
+  const left = t.srcX / TILE_PX - 1;
+  const top = t.srcY / TILE_PX - 1;
+  const right = (t.srcX + t.srcSize) / TILE_PX + 1;
+  const bottom = (t.srcY + t.srcSize) / TILE_PX + 1;
+  const visible = (x, y) => x >= left && x <= right && y >= top && y <= bottom;
+
+  const resourceView = view === 'minerals' || view === 'natural';
 
   // Resource markers: all of them on the satellite view, a single filtered
-  // category (drawn larger, with an outline) on the resource views.
+  // category (drawn larger, with an outline) on the resource views. They
+  // mark individual tiles, so they scale with the tiles.
   if (view === 'satellite' || resourceView) {
     const filter = view === 'minerals' ? 'mineral'
       : view === 'natural' ? 'natural' : null;
-    const radius = resourceView ? TILE_PX * 0.75 : TILE_PX * 0.42;
+    const radius = (resourceView ? TILE_PX * 0.75 : TILE_PX * 0.42) * t.scale;
+    const { size } = world;
 
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
+    for (let y = Math.max(0, Math.floor(top)); y < Math.min(size, bottom); y++) {
+      for (let x = Math.max(0, Math.floor(left)); x < Math.min(size, right); x++) {
         const res = world.resources[y * size + x];
         if (!res) continue;
         if (filter && res.category !== filter) continue;
-        const px = x * TILE_PX + TILE_PX / 2;
-        const py = y * TILE_PX + TILE_PX / 2;
         ctx.fillStyle = res.color;
         ctx.beginPath();
-        ctx.arc(px, py, radius, 0, Math.PI * 2);
+        ctx.arc(toScreenX(x), toScreenY(y), radius, 0, Math.PI * 2);
         ctx.fill();
         if (resourceView) {
           ctx.strokeStyle = 'rgba(0,0,0,0.6)';
-          ctx.lineWidth = 0.8;
+          ctx.lineWidth = Math.max(0.8, 0.8 * t.scale);
           ctx.stroke();
         }
       }
@@ -206,39 +307,54 @@ function renderWorld(world, canvas, view = 'satellite') {
 
   // Settlements (places) are drawn on the satellite and communities views,
   // coloured by the tribe they give allegiance to. Marker size scales with
-  // population; the communities view labels each tribe at its chief
-  // settlement.
+  // population, and grows gently with zoom rather than tile-for-tile.
   if ((view === 'satellite' || view === 'communities') && world.settlements) {
+    const markerScale = Math.sqrt(camera.zoom);
+
     for (const s of world.settlements) {
       const tribe = world.tribes[s.tribeId];
-      if (!tribe || !tribe.alive) continue;
-      const px = s.x * TILE_PX + TILE_PX / 2;
-      const py = s.y * TILE_PX + TILE_PX / 2;
-      const radius = 2.5 + Math.sqrt(s.pop) / 5;
+      if (!tribe || !tribe.alive || !visible(s.x, s.y)) continue;
       ctx.fillStyle = tribe.color;
       ctx.strokeStyle = 'rgba(0,0,0,0.85)';
       ctx.lineWidth = 1.4;
       ctx.beginPath();
-      ctx.arc(px, py, radius, 0, Math.PI * 2);
+      ctx.arc(toScreenX(s.x), toScreenY(s.y),
+        (2.5 + Math.sqrt(s.pop) / 5) * markerScale, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
     }
 
-    if (view === 'communities') {
-      ctx.font = 'bold 12px system-ui, sans-serif';
+    // Labels keep a constant size on screen, the way a map's do.
+    const label = (text, screenX, screenY, font) => {
+      ctx.font = font;
       ctx.textAlign = 'center';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+      ctx.strokeText(text, screenX, screenY);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(text, screenX, screenY);
+    };
+
+    if (view === 'communities') {
       for (const tribe of world.tribes) {
         if (!tribe.alive) continue;
         const chief = tribeChiefSettlement(world, tribe);
-        if (!chief) continue;
-        const px = chief.x * TILE_PX + TILE_PX / 2;
-        const py = chief.y * TILE_PX + TILE_PX / 2;
-        const radius = 2.5 + Math.sqrt(chief.pop) / 5;
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = 'rgba(0,0,0,0.8)';
-        ctx.strokeText(tribe.name, px, py - radius - 5);
-        ctx.fillStyle = '#fff';
-        ctx.fillText(tribe.name, px, py - radius - 5);
+        if (!chief || !visible(chief.x, chief.y)) continue;
+        const radius = (2.5 + Math.sqrt(chief.pop) / 5) * markerScale;
+        label(tribe.name, toScreenX(chief.x), toScreenY(chief.y) - radius - 5,
+          'bold 12px system-ui, sans-serif');
+      }
+    }
+
+    // Zoomed in far enough to read the map in detail: name the places
+    // themselves, which is the point of having settlements as entities.
+    if (camera.zoom >= 2.5) {
+      for (const s of world.settlements) {
+        const tribe = world.tribes[s.tribeId];
+        if (!tribe || !tribe.alive || !visible(s.x, s.y)) continue;
+        const radius = (2.5 + Math.sqrt(s.pop) / 5) * markerScale;
+        label(s.name, toScreenX(s.x), toScreenY(s.y) + radius + 12,
+          '11px system-ui, sans-serif');
       }
     }
   }
