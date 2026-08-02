@@ -168,6 +168,8 @@ function updateGovernance(world, tribe, pop, rng, log) {
     if (rng.random() < 0.01 * (1 - tribe.traits.discipline) * 2) {
       damageTribe(world, tribe, 0.02, rng);
       nudgeTrait(tribe, 'cohesion', -0.01);
+      tribe.weakUntil = world.year + 5; // chaos invites the neighbours
+      rollLeader(world, tribe, rng, log, true);
       log(`A succession crisis convulsed ${tribe.name}.`);
     }
   }
@@ -177,7 +179,33 @@ function updateGovernance(world, tribe, pop, rng, log) {
       pop < tribe.peakPop * 0.5) {
     p.governance = 'chiefdom';
     tribe.peakPop = pop;
+    tribe.weakUntil = world.year + 8;
     log(`Order broke down; ${tribe.name} fell back under rival chiefs.`);
+  }
+}
+
+// --- Leaders -----------------------------------------------------------------
+// Each tribe is led by someone — abstracted to a single temperament in
+// [-0.3, 0.3]: negative leans to peace, positive hungers for war. Leaders
+// pass in time (or fall in succession crises), and a change at the top
+// can tip a standing rivalry into war, or a war into peace.
+
+function rollLeader(world, tribe, rng, log, forced = false) {
+  const due = !tribe.leaderSince ||
+    world.year - tribe.leaderSince >= (tribe.leaderTerm || 0);
+  if (!due && !forced) return;
+
+  // Temperament centres on the people's own aggression.
+  const lean = (tribe.traits.aggression - 0.5) * 0.2;
+  tribe.leaderBias = Math.max(-0.3, Math.min(0.3, lean + rng.range(-0.2, 0.2)));
+  tribe.leaderSince = world.year;
+  tribe.leaderTerm = rng.int(12, 35);
+
+  // Only notable temperaments make the chronicle.
+  if (world.year > 0 && tribe.leaderBias > 0.12) {
+    log(`A new leader rose among ${tribe.name}, hungry for glory in war.`);
+  } else if (world.year > 0 && tribe.leaderBias < -0.12) {
+    log(`A new leader rose among ${tribe.name}, minded toward peace.`);
   }
 }
 
@@ -240,7 +268,11 @@ function updateBands(world, tribe, rng, seasonFactor, log) {
 function updateSettlements(world, tribe, rng, seasonFactor, log) {
   const settlements = tribeSettlements(world, tribe.id);
   const stability = governanceStability(tribe);
-  const prosperity = tribe.tradePartners > 0 ? 1.15 : 1;
+  let prosperity = tribe.tradePartners > 0 ? 1.15 : 1;
+  // Tribute drains the payer.
+  if (tribe.tributeTo !== undefined && world.year < tribe.tributeUntil) {
+    prosperity *= 0.94;
+  }
 
   for (const s of settlements) {
     const cap = Math.max(20, settlementCapacity(world, s, tribe) * seasonFactor);
@@ -375,8 +407,14 @@ function simulateYear(world) {
     }
 
     // Society.
+    rollLeader(world, tribe, tribeRng.fork('leader'), log);
     updateGovernance(world, tribe, totalTribePop(world, tribe), tribeRng.fork('gov'), log);
     driftTraits(tribe, tribeRng.fork('drift'));
+
+    // Tribute runs out.
+    if (tribe.tributeTo !== undefined && tribe.tributeUntil <= world.year) {
+      tribe.tributeTo = undefined;
+    }
 
     checkTribeDeath(world, tribe, log);
   }

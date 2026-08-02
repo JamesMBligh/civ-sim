@@ -137,6 +137,11 @@
       `<span>⚖ ${(posture.trade * 100).toFixed(0)}%</span>` +
       `<span>📜 ${(posture.learning * 100).toFixed(0)}%</span></div>` +
       traitRows +
+      `<div class="insp-section"><strong>Leadership:</strong> ${
+        (t.leaderBias || 0) > 0.12 ? 'war-hungry'
+          : (t.leaderBias || 0) < -0.12 ? 'peace-minded' : 'steady'
+      }${t.tributeTo !== undefined && world.tribes[t.tributeTo]
+        ? ` · pays tribute to ${world.tribes[t.tributeTo].name}` : ''}</div>` +
       `<div class="insp-section"><strong>Technologies:</strong> ${techNames.join(', ') || 'none'}</div>` +
       `<div class="insp-section"><strong>Researching:</strong> ${target}</div>` +
       `<div class="insp-section"><strong>Art:</strong> ${ART_STAGES[p.artStage]} · ` +
