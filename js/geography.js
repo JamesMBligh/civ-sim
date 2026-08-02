@@ -89,8 +89,8 @@ const IMPASSABLE = Infinity;
 // raw terrain is what makes traffic consolidate onto existing corridors
 // instead of wearing new parallel paths — the wider the gap, the fewer
 // roads the island ends up needing.
-const COST_ROAD = 0.28;        // established road: strongly preferred (3.5:1 vs plains)
-const TRACK_FACTOR = 0.7;      // a worn track modestly eases the underlying terrain
+const COST_ROAD = 0.08;        // established road: strongly preferred (3.5:1 vs plains)
+const TRACK_FACTOR = 0.85;      // a worn track modestly eases the underlying terrain
 const COST_FERRY_BOATS = 0.35; // a worked crossing, for peoples with boats
 const COST_FERRY_WALK = 1.5;   // an operated ferry carries anyone, at a price
 
