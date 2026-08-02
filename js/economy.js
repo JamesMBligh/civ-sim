@@ -170,7 +170,7 @@ function buildRoads(world, tribe, log) {
   if (!tribe.progress.techs.has('roads') || !world.roadLevel) return;
   const { size } = world;
   const owner = world.influenceOwner;
-  const perYear = Math.round(1 + 4 * tribe.traits.discipline +
+  const perYear = Math.round(1 + 2 * tribe.traits.discipline +
     (tribe.progress.governance !== 'chiefdom' ? 1 : 0));
 
   // Candidate tiles: this tribe's busy tracks — and, with the Bridges
@@ -180,8 +180,9 @@ function buildRoads(world, tribe, log) {
   const candidates = [];
   for (let i = 0; i < size * size; i++) {
     // Only genuinely busy tiles are worth the work — this keeps braided
-    // parallel paths from all being made permanent.
-    if (world.wear[i] <= 50 || !owner || owner[i] !== tribe.id) continue;
+    // parallel paths from all being made permanent. Paving is reserved
+    // for arterials, not every worn footpath.
+    if (world.wear[i] <= 75 || !owner || owner[i] !== tribe.id) continue;
     if (world.roadLevel[i] === ROAD_TRACK) candidates.push(i);
     else if (world.roadLevel[i] === ROAD_FERRY && canBridge &&
              world.terrain[i] === TERRAIN.RIVER) {
