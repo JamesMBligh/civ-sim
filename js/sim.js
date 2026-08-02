@@ -129,7 +129,8 @@ function governanceStability(tribe) {
   const g = tribe.progress.governance;
   const d = tribe.traits.discipline;
   const base = { band: 1.0, chiefdom: 1.01, theocracy: 1.03, kingship: 1.03, council: 1.03, merchant: 1.03 }[g] || 1;
-  return base * (0.97 + 0.06 * d);
+  // A divided polity governs badly.
+  return base * (0.97 + 0.06 * d) * (0.94 + 0.06 * (tribe.unity ?? 1));
 }
 
 function maxSettlements(tribe) {
@@ -168,6 +169,8 @@ function updateGovernance(world, tribe, pop, rng, log) {
     if (rng.random() < 0.01 * (1 - tribe.traits.discipline) * 2) {
       damageTribe(world, tribe, 0.02, rng);
       nudgeTrait(tribe, 'cohesion', -0.01);
+      tribe.weakUntil = world.year + 5; // chaos invites the neighbours
+      rollLeader(world, tribe, rng, log, true);
       log(`A succession crisis convulsed ${tribe.name}.`);
     }
   }
@@ -177,7 +180,109 @@ function updateGovernance(world, tribe, pop, rng, log) {
       pop < tribe.peakPop * 0.5) {
     p.governance = 'chiefdom';
     tribe.peakPop = pop;
+    tribe.weakUntil = world.year + 8;
     log(`Order broke down; ${tribe.name} fell back under rival chiefs.`);
+  }
+}
+
+// --- Unity and civil war -------------------------------------------------------
+// Unity is the polity's current condition (state), distinct from cohesion
+// (the people's character, a trait). Conquest dilutes unity with
+// unabsorbed masses; time rebuilds it — faster for cohesive, disciplined
+// peoples. Deeply divided empires can tear themselves apart.
+
+function updateUnity(world, tribe) {
+  if (tribe.unity === undefined) tribe.unity = 1;
+  const settlements = tribeSettlements(world, tribe.id);
+
+  // Overextension: holding more places than the polity's governance can
+  // coordinate grinds unity down, year on year.
+  const over = Math.max(0, settlements.length - maxSettlements(tribe));
+  if (over > 0) {
+    tribe.unity = Math.max(0, tribe.unity - 0.004 * over);
+  }
+
+  // Healing is slow — generations, not years — and impossible while the
+  // empire is still digesting conquered peoples.
+  const digesting = settlements.some((s) =>
+    s.assimilatingUntil && world.year < s.assimilatingUntil);
+  if (!digesting && over === 0) {
+    const recovery = 0.0015 *
+      (0.5 + 0.5 * tribe.traits.cohesion) *
+      (0.5 + 0.5 * tribe.traits.discipline);
+    tribe.unity = Math.min(1, tribe.unity + recovery);
+  }
+}
+
+const CIVIL_WAR_UNITY = 0.4;
+
+function checkCivilWar(world, tribe, rng, log) {
+  const settlements = tribeSettlements(world, tribe.id);
+  if (settlements.length < 3 || (tribe.unity ?? 1) >= CIVIL_WAR_UNITY) return;
+
+  const p = 0.1 * ((CIVIL_WAR_UNITY - tribe.unity) / CIVIL_WAR_UNITY) *
+    (1.5 - tribe.traits.discipline);
+  if (rng.random() >= p) return;
+
+  // The empire splits: the breakaway takes roughly half the settlements,
+  // preferring the unassimilated conquests and the places farthest from
+  // the chief settlement — the periphery goes first.
+  const chief = tribeChiefSettlement(world, tribe);
+  const candidates = settlements
+    .filter((s) => s !== chief)
+    .map((s) => {
+      const dx = s.x - chief.x;
+      const dy = s.y - chief.y;
+      const foreign = s.assimilatingUntil && world.year < s.assimilatingUntil ? 1 : 0;
+      return { s, score: foreign * 1000 + dx * dx + dy * dy };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  const takeCount = Math.max(1, Math.floor(settlements.length / 2));
+  const splinter = createSplinterTribe(world, tribe, rng);
+  const taken = candidates.slice(0, takeCount).map((c) => c.s);
+  for (const s of taken) {
+    s.tribeId = splinter.id;
+    s.assimilatingUntil = undefined; // they follow the rebels willingly
+  }
+  splinter.rangeCenter = { x: taken[0].x, y: taken[0].y };
+  splinter.peakPop = totalTribePop(world, splinter);
+
+  tribe.unity = 0.7; // what remains is the coherent core
+  tribe.peakPop = totalTribePop(world, tribe);
+  tribe.weakUntil = world.year + 6;
+
+  // Civil war: the halves part in blood, not peace.
+  const key = relationKey(tribe.id, splinter.id);
+  world.relations[key] = {
+    stance: 'war', familiarity: 1.5, grievances: 3, warYears: 0, warScore: 0,
+  };
+  log(`Civil war! ${splinter.name} broke away from ${tribe.name}, ` +
+    `taking ${taken.length} settlement${taken.length > 1 ? 's' : ''}.`);
+}
+
+// --- Leaders -----------------------------------------------------------------
+// Each tribe is led by someone — abstracted to a single temperament in
+// [-0.3, 0.3]: negative leans to peace, positive hungers for war. Leaders
+// pass in time (or fall in succession crises), and a change at the top
+// can tip a standing rivalry into war, or a war into peace.
+
+function rollLeader(world, tribe, rng, log, forced = false) {
+  const due = !tribe.leaderSince ||
+    world.year - tribe.leaderSince >= (tribe.leaderTerm || 0);
+  if (!due && !forced) return;
+
+  // Temperament centres on the people's own aggression.
+  const lean = (tribe.traits.aggression - 0.5) * 0.2;
+  tribe.leaderBias = Math.max(-0.3, Math.min(0.3, lean + rng.range(-0.2, 0.2)));
+  tribe.leaderSince = world.year;
+  tribe.leaderTerm = rng.int(12, 35);
+
+  // Only notable temperaments make the chronicle.
+  if (world.year > 0 && tribe.leaderBias > 0.12) {
+    log(`A new leader rose among ${tribe.name}, hungry for glory in war.`);
+  } else if (world.year > 0 && tribe.leaderBias < -0.12) {
+    log(`A new leader rose among ${tribe.name}, minded toward peace.`);
   }
 }
 
@@ -240,12 +345,26 @@ function updateBands(world, tribe, rng, seasonFactor, log) {
 function updateSettlements(world, tribe, rng, seasonFactor, log) {
   const settlements = tribeSettlements(world, tribe.id);
   const stability = governanceStability(tribe);
-  const prosperity = tribe.tradePartners > 0 ? 1.15 : 1;
+  let prosperity = tribe.tradePartners > 0 ? 1.15 : 1;
+  // Tribute drains the payer.
+  if (tribe.tributeTo !== undefined && world.year < tribe.tributeUntil) {
+    prosperity *= 0.94;
+  }
+  // A disunited people work against each other.
+  prosperity *= 0.8 + 0.2 * (tribe.unity ?? 1);
 
   for (const s of settlements) {
     const cap = Math.max(20, settlementCapacity(world, s, tribe) * seasonFactor);
     let r = 0.008 * stability * prosperity * varianceRoll(rng, tribe.traits);
-    if (s.assimilatingUntil && world.year < s.assimilatingUntil) r *= 0.4;
+    if (s.assimilatingUntil) {
+      if (world.year < s.assimilatingUntil) {
+        r *= 0.4;
+      } else {
+        // The conquered have become one people with their conquerors.
+        s.assimilatingUntil = undefined;
+        tribe.unity = Math.min(1, (tribe.unity ?? 1) + 0.05);
+      }
+    }
     s.pop = Math.max(0, s.pop + r * s.pop * (1 - s.pop / cap));
   }
 
@@ -330,7 +449,9 @@ function simulateYear(world) {
     log('A mild year with rich harvests of forage and game.');
   }
 
-  for (const tribe of world.tribes) {
+  // Snapshot: a civil war can add a splinter tribe mid-year; it begins
+  // living its own years from the next tick.
+  for (const tribe of [...world.tribes]) {
     if (!tribe.alive) continue;
     const tribeRng = rng.fork('tribe:' + tribe.id);
 
@@ -375,8 +496,16 @@ function simulateYear(world) {
     }
 
     // Society.
+    rollLeader(world, tribe, tribeRng.fork('leader'), log);
     updateGovernance(world, tribe, totalTribePop(world, tribe), tribeRng.fork('gov'), log);
+    updateUnity(world, tribe);
+    checkCivilWar(world, tribe, tribeRng.fork('civil'), log);
     driftTraits(tribe, tribeRng.fork('drift'));
+
+    // Tribute runs out.
+    if (tribe.tributeTo !== undefined && tribe.tributeUntil <= world.year) {
+      tribe.tributeTo = undefined;
+    }
 
     checkTribeDeath(world, tribe, log);
   }

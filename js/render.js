@@ -146,6 +146,61 @@ function satelliteColor(world, x, y, i) {
   return [r, g, b];
 }
 
+// What settlement actually looks like from above: built-up ground at the
+// core, worked fields around it. Returns per-tile intensities.
+function computeVisibleDevelopment(world) {
+  const { size } = world;
+  const urban = new Float32Array(size * size);
+  const fields = new Float32Array(size * size);
+  if (!world.settlements || world.settlements.length === 0) {
+    return { urban, fields };
+  }
+  computeFoodValues(world); // for farmValue: fields only appear on arable land
+
+  for (const s of world.settlements) {
+    const tribe = world.tribes[s.tribeId];
+    if (!tribe || !tribe.alive) continue;
+
+    // Built-up core: grows with population, visible from ~a village up.
+    const uR = Math.min(3, 0.6 + Math.sqrt(s.pop) / 25);
+    const uStrength = Math.min(1, s.pop / 500);
+    const uri = Math.ceil(uR);
+    for (let dy = -uri; dy <= uri; dy++) {
+      for (let dx = -uri; dx <= uri; dx++) {
+        const x = s.x + dx;
+        const y = s.y + dy;
+        if (x < 0 || y < 0 || x >= size || y >= size) continue;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d > uR) continue;
+        const i = y * size + x;
+        if (isWater(world.terrain[i])) continue;
+        urban[i] = Math.max(urban[i], uStrength * (1 - d / (uR + 0.5)));
+      }
+    }
+
+    // Field patchwork: only for farming peoples, only on arable tiles,
+    // hugging the settlement rather than blanketing the region.
+    if (tribe.progress.techs.has('agriculture') && !s.proto) {
+      const fR = Math.min(6, 1.5 + Math.sqrt(s.pop) / 14);
+      const fStrength = Math.min(1, s.pop / 400);
+      const fri = Math.ceil(fR);
+      for (let dy = -fri; dy <= fri; dy++) {
+        for (let dx = -fri; dx <= fri; dx++) {
+          const x = s.x + dx;
+          const y = s.y + dy;
+          if (x < 0 || y < 0 || x >= size || y >= size) continue;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d > fR) continue;
+          const i = y * size + x;
+          if (world.farmValue[i] < 8 || isWater(world.terrain[i])) continue;
+          fields[i] = Math.max(fields[i], fStrength * Math.pow(1 - d / (fR + 0.5), 1.4));
+        }
+      }
+    }
+  }
+  return { urban, fields };
+}
+
 function buildBaseLayer(world, view) {
   const { size } = world;
   const worldPx = size * TILE_PX;
@@ -163,6 +218,10 @@ function buildBaseLayer(world, view) {
 
   const resourceView = view === 'minerals' || view === 'natural';
   const tribeRgb = (world.tribes || []).map((t) => hexToRgb(t.color));
+
+  // The satellite view shows civilization as it would actually look from
+  // above: built-up cores and worked fields, part of the landscape itself.
+  const dev = view === 'satellite' ? computeVisibleDevelopment(world) : null;
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -233,6 +292,25 @@ function buildBaseLayer(world, view) {
       } else {
         // satellite
         [r, g, b] = satelliteColor(world, x, y, i);
+
+        // Worked fields: a tan patchwork over arable land, hashed per
+        // tile so adjacent fields read as separate plots.
+        if (dev && dev.fields[i] > 0.04) {
+          const h = (i * 2654435761) >>> 0;
+          const vary = ((h & 31) - 16) * 1.4;
+          const a = Math.min(0.68, dev.fields[i] * 0.75);
+          r = r * (1 - a) + (196 + vary) * a;
+          g = g * (1 - a) + (176 + vary * 0.8) * a;
+          b = b * (1 - a) + (96 + vary * 0.5) * a;
+        }
+        // Built-up ground: a distinct earthen brown, strengthening with
+        // population so towns read as towns against any terrain.
+        if (dev && dev.urban[i] > 0.04) {
+          const a = Math.min(0.92, dev.urban[i]);
+          r = r * (1 - a) + 122 * a;
+          g = g * (1 - a) + 104 * a;
+          b = b * (1 - a) + 86 * a;
+        }
       }
 
       // Fill the TILE_PX x TILE_PX block
@@ -253,7 +331,7 @@ function buildBaseLayer(world, view) {
 
 // --- Frame ----------------------------------------------------------------
 
-function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBase = true) {
+function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBase = true, overlays = {}) {
   camera = clampCamera(world, camera || createCamera());
 
   const key = `${world.seed}|${view}`;
@@ -287,10 +365,10 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
 
   const resourceView = view === 'minerals' || view === 'natural';
 
-  // Resource markers: all of them on the satellite view, a single filtered
-  // category (drawn larger, with an outline) on the resource views. They
-  // mark individual tiles, so they scale with the tiles.
-  if (view === 'satellite' || resourceView) {
+  // Resource markers: an optional overlay on the satellite view, a single
+  // filtered category (drawn larger, with an outline) on the resource
+  // views. They mark individual tiles, so they scale with the tiles.
+  if ((view === 'satellite' && overlays.resources) || resourceView) {
     const filter = view === 'minerals' ? 'mineral'
       : view === 'natural' ? 'natural' : null;
     const radius = (resourceView ? TILE_PX * 0.75 : TILE_PX * 0.42) * t.scale;
@@ -315,10 +393,12 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
   }
 
   // Settlements (places) and bands (nomadic presences) are drawn on the
-  // satellite, communities and development views, coloured by the tribe
-  // they answer to. Settled markers are solid and scale with population;
-  // bands are small open rings — people passing through, not places.
-  const peopleView = view === 'satellite' || view === 'communities' || view === 'development';
+  // communities and development views, and on satellite as an optional
+  // overlay — by default the satellite shows only what is physically
+  // visible. Settled markers are solid and scale with population; bands
+  // are small open rings — people passing through, not places.
+  const peopleView = (view === 'satellite' && overlays.settlements) ||
+    view === 'communities' || view === 'development';
   if (peopleView && (world.settlements || world.bands)) {
     const markerScale = Math.sqrt(camera.zoom);
     const markerRadius = (pop) => (2.5 + Math.sqrt(pop) / 5) * markerScale;

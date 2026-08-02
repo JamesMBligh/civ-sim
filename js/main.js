@@ -26,6 +26,9 @@
   let world = null;
   let camera = createCamera();
   let selectedTribeId = null;
+  // Satellite overlays are off by default: the view shows only what is
+  // physically visible from above.
+  const overlays = { resources: false, settlements: false };
 
   function formatPop(n) {
     n = Math.round(n);
@@ -107,8 +110,11 @@
     const p = t.progress;
     const posture = computePosture(t.traits);
     const era = ERA_LABELS[tribeEra(t)];
-    const arch = t.archetype === 'random' ? 'A people of their own kind'
+    let arch = t.archetype === 'random' ? 'A people of their own kind'
       : `${ARCHETYPES[t.archetype].label} archetype`;
+    if (t.parentId !== undefined && world.tribes[t.parentId]) {
+      arch = `Broke away from ${world.tribes[t.parentId].name}`;
+    }
 
     const traitRows = TRAIT_KEYS.map((key) =>
       `<div class="trait-row"><span class="trait-name">${TRAIT_LABELS[key]}</span>` +
@@ -137,6 +143,13 @@
       `<span>⚖ ${(posture.trade * 100).toFixed(0)}%</span>` +
       `<span>📜 ${(posture.learning * 100).toFixed(0)}%</span></div>` +
       traitRows +
+      `<div class="insp-section"><strong>Unity:</strong> ${(100 * (t.unity ?? 1)).toFixed(0)}%${
+        (t.unity ?? 1) < 0.35 ? ' — on the brink of civil war' : ''}</div>` +
+      `<div class="insp-section"><strong>Leadership:</strong> ${
+        (t.leaderBias || 0) > 0.12 ? 'war-hungry'
+          : (t.leaderBias || 0) < -0.12 ? 'peace-minded' : 'steady'
+      }${t.tributeTo !== undefined && world.tribes[t.tributeTo]
+        ? ` · pays tribute to ${world.tribes[t.tributeTo].name}` : ''}</div>` +
       `<div class="insp-section"><strong>Technologies:</strong> ${techNames.join(', ') || 'none'}</div>` +
       `<div class="insp-section"><strong>Researching:</strong> ${target}</div>` +
       `<div class="insp-section"><strong>Art:</strong> ${ART_STAGES[p.artStage]} · ` +
@@ -157,14 +170,14 @@
   // Full refresh: repaints the tile layer too (world or simulation changed).
   function refreshView() {
     const view = viewSelect.value;
-    renderWorld(world, canvas, view, camera, true);
+    renderWorld(world, canvas, view, camera, true, overlays);
     renderLegends(view);
     updateZoomUI();
   }
 
   // Cheap refresh for panning and zooming: reuses the cached tile layer.
   function redraw() {
-    renderWorld(world, canvas, viewSelect.value, camera, false);
+    renderWorld(world, canvas, viewSelect.value, camera, false, overlays);
     updateZoomUI();
   }
 
@@ -268,8 +281,27 @@
         `<span>${ERA_LABELS[era]}</span></div>`).join('');
       legendBTitle.textContent = '';
       resourceLegend.innerHTML = '';
+    } else if (view === 'satellite') {
+      legendATitle.textContent = 'Terrain';
+      terrainLegend.innerHTML = terrainSwatchRows() +
+        `<div class="legend-row"><span class="swatch" style="background: rgb(142,132,118)"></span><span>Built-up ground</span></div>` +
+        `<div class="legend-row"><span class="swatch" style="background: rgb(188,172,104)"></span><span>Worked fields</span></div>`;
+      legendBTitle.textContent = 'Overlays';
+      resourceLegend.innerHTML =
+        `<label class="legend-row toggle-row"><input type="checkbox" id="toggle-resources"${overlays.resources ? ' checked' : ''}> Resource markers</label>` +
+        `<label class="legend-row toggle-row"><input type="checkbox" id="toggle-settlements"${overlays.settlements ? ' checked' : ''}> Settlement markers</label>` +
+        (overlays.resources ? resourceSwatchRows() : '');
+      document.getElementById('toggle-resources').addEventListener('change', (ev) => {
+        overlays.resources = ev.target.checked;
+        redraw();
+        renderLegends('satellite');
+      });
+      document.getElementById('toggle-settlements').addEventListener('change', (ev) => {
+        overlays.settlements = ev.target.checked;
+        redraw();
+      });
     } else {
-      // satellite / elevation
+      // elevation
       legendATitle.textContent = 'Terrain';
       terrainLegend.innerHTML = terrainSwatchRows();
       legendBTitle.textContent = 'Resources';

@@ -182,6 +182,8 @@
     color: var(--text-dim);
   }
   #events-log .ev-year { color: var(--accent); font-weight: 600; }
+  .toggle-row { cursor: pointer; user-select: none; }
+  .toggle-row input { accent-color: var(--accent); margin-right: 2px; }
   .tribe-row { cursor: pointer; border-radius: 4px; padding-left: 4px; }
   .tribe-row:hover { background: rgba(255,255,255,0.05); }
   .tribe-row.selected { background: rgba(79,163,209,0.15); }
@@ -1248,8 +1250,10 @@ function updateKnowledge(world, tribe, pop, rng, seasonFactor) {
   const v = varianceRoll(rng, traits);
 
   // Surplus effort scales with sqrt(pop): bigger societies free more
-  // hands, with diminishing returns.
-  const surplus = Math.sqrt(Math.max(0, pop)) * seasonFactor * v;
+  // hands, with diminishing returns. A disunited polity squanders much
+  // of what it raises.
+  const surplus = Math.sqrt(Math.max(0, pop)) * seasonFactor * v *
+    (0.7 + 0.3 * (tribe.unity ?? 1));
   const prosperity = tribe.tradePartners > 0 ? 1.3 : 1.0;
 
   p.pools.tech += 0.15 * surplus * (2 * posture.learning) * (0.5 + traits.acumen);
@@ -1531,6 +1535,56 @@ function settleTribe(world, tribe, rng, { proto = false } = {}) {
   return settlement;
 }
 
+// A splinter people born of civil war: they carry the parent's knowledge
+// and most of its character, but their identity is forged anew in revolt —
+// cohesion runs higher, and the founding traits reset to who they now are.
+function createSplinterTribe(world, parent, rng) {
+  const id = world.tribes.length;
+  const takenNames = new Set(world.tribes.map((t) => t.name));
+  const traits = {};
+  for (const key of TRAIT_KEYS) {
+    traits[key] = clamp01(parent.traits[key] + rng.range(-0.08, 0.08));
+  }
+  traits.cohesion = clamp01(traits.cohesion + 0.15);
+
+  const tribe = {
+    id,
+    name: generateTribeName(rng, takenNames),
+    color: TRIBE_COLORS[id % TRIBE_COLORS.length],
+    alive: true,
+    archetype: parent.archetype,
+    parentId: parent.id,
+    traits,
+    foundingTraits: { ...traits },
+    nudges: {},
+    progress: {
+      techs: new Set(parent.progress.techs), // knowledge does not un-learn
+      pools: {
+        tech: parent.progress.pools.tech * 0.3,
+        art: parent.progress.pools.art * 0.3,
+        philosophy: parent.progress.pools.philosophy * 0.3,
+      },
+      governance: 'chiefdom',
+      artStage: parent.progress.artStage,
+      philStage: parent.progress.philStage,
+      target: null,
+    },
+    resourceAccess: new Set(),
+    tradePartners: 0,
+    sedentaryYear: parent.sedentaryYear,
+    peakPop: 0,
+    unity: 0.85,
+    rangeCenter: { ...parent.rangeCenter },
+  };
+  // The parent keeps 70% of its accumulated pools.
+  parent.progress.pools.tech *= 0.7;
+  parent.progress.pools.art *= 0.7;
+  parent.progress.pools.philosophy *= 0.7;
+
+  world.tribes.push(tribe);
+  return tribe;
+}
+
 function foundTribes(world, count = 7) {
   const rng = new RNG(world.seed + ':tribes');
   const { size } = world;
@@ -1598,6 +1652,11 @@ function foundTribes(world, count = 7) {
       tradePartners: 0,
       sedentaryYear: null,
       peakPop: 0,
+      // Unity is STATE, not a trait: the current condition of the polity.
+      // Conquest dilutes it with unabsorbed peoples; time, cohesion and
+      // discipline rebuild it. Low unity saps the economy and can end in
+      // civil war.
+      unity: 1,
       rangeCenter: { x: site.x, y: site.y },
     };
   });
@@ -1710,21 +1769,43 @@ function tradeDesire(world, a, b, rel) {
       !x.resourceAccess.has(r) && y.resourceAccess.has(r));
     if (wants) d += 0.15;
   }
+  // Belligerent leaders sour commerce; conciliatory ones court it.
+  d -= 0.3 * Math.max(0, (a.leaderBias || 0) + (b.leaderBias || 0));
   return d - 0.1 * rel.grievances;
 }
 
-function warDesire(world, a, b, rel) {
-  let d = 0.5 * (a.traits.aggression + b.traits.aggression)
-    + 0.3 * (a.traits.cohesion + b.traits.cohesion) / 2
-    + 0.12 * rel.grievances
-    - 0.25 * Math.min(1, rel.familiarity);
+// War appetite is directional: what X wants against Y. Strength preys on
+// weakness (opportunism), leaders tilt the scales, and a neighbour's
+// moment of internal chaos is an invitation. Familiarity soothes, but
+// only so much — old neighbours can still come to blows.
+function directionalWarDesire(world, x, y, rel) {
+  let d = 0.45 * x.traits.aggression
+    + 0.2 * x.traits.cohesion
+    + 0.1 * rel.grievances
+    - 0.12 * Math.min(1, rel.familiarity)
+    + (x.leaderBias || 0);
+
+  // Opportunism: dominant tribes pressure weaker neighbours.
+  const px = totalTribePop(world, x);
+  const py = Math.max(1, totalTribePop(world, y));
+  const powerRatio = px / py;
+  if (powerRatio > 1.4) d += Math.min(0.3, 0.12 * (powerRatio - 1.4));
+
+  // Weakness invites attack: crises leave a window of vulnerability.
+  if (y.weakUntil && world.year < y.weakUntil) d += 0.2;
+
   // Resource envy: a martial people locked out of the metals.
-  for (const [x, y] of [[a, b], [b, a]]) {
-    const envy = ['tin', 'copper', 'iron'].some((r) =>
-      !x.resourceAccess.has(r) && y.resourceAccess.has(r));
-    if (envy && computePosture(x.traits).military > 0.38) d += 0.2;
-  }
+  const envy = ['tin', 'copper', 'iron'].some((r) =>
+    !x.resourceAccess.has(r) && y.resourceAccess.has(r));
+  if (envy && computePosture(x.traits).military > 0.36) d += 0.2;
+
   return d;
+}
+
+function warDesire(world, a, b, rel) {
+  return Math.max(
+    directionalWarDesire(world, a, b, rel),
+    directionalWarDesire(world, b, a, rel));
 }
 
 // Military strength for a raid/battle roll. Discipline helps organised
@@ -1745,9 +1826,12 @@ function militaryStrength(world, tribe, rng) {
     varianceRoll(rng, tribe.traits);
 }
 
-function defensiveBonus(tribe) {
-  return tribe.progress.techs.has('fortifications')
+function defensiveBonus(world, tribe) {
+  let bonus = tribe.progress.techs.has('fortifications')
     ? 1.2 + 0.3 * tribe.traits.discipline : 1;
+  // A people defending their last town fight with their backs to it.
+  if (tribeSettlements(world, tribe.id).length === 1) bonus *= 1.35;
+  return bonus;
 }
 
 // Yearly relations pass: stance transitions, trade effects, war damage,
@@ -1764,9 +1848,14 @@ function updateRelations(world, rng, log) {
     if (!a || !b || !a.alive || !b.alive) continue;
 
     const pairRng = rng.fork(`rel:${key}`);
-    rel.familiarity = Math.min(2, rel.familiarity +
-      (rel.stance === 'trade' ? 0.04 : rel.stance === 'war' ? 0.01 : 0.02));
-    rel.grievances = Math.max(0, rel.grievances - 0.02); // old wounds fade
+    // Familiarity grows through peaceful contact and erodes in hostility.
+    rel.familiarity = Math.max(0, Math.min(2, rel.familiarity +
+      (rel.stance === 'trade' ? 0.04
+        : rel.stance === 'contact' ? 0.02 : -0.01)));
+    rel.grievances = Math.max(0, rel.grievances - 0.01); // old wounds fade slowly
+
+    // Diplomatic incidents: chance sparks that history turns on.
+    diplomaticEvent(world, a, b, rel, pairRng, log);
 
     const td = tradeDesire(world, a, b, rel);
     const wd = warDesire(world, a, b, rel);
@@ -1776,14 +1865,14 @@ function updateRelations(world, rng, log) {
         if (td > 0.75 && pairRng.random() < 0.25) {
           rel.stance = 'trade';
           log(`${a.name} and ${b.name} began to trade.`);
-        } else if (wd > 0.7 && pairRng.random() < 0.15) {
+        } else if (wd > 0.65 && pairRng.random() < 0.15) {
           rel.stance = 'rivalry';
           log(`Rivalry hardened between ${a.name} and ${b.name}.`);
         }
         break;
 
       case 'trade':
-        if (wd > 0.95 && pairRng.random() < 0.1) {
+        if (wd > 0.9 && pairRng.random() < 0.1) {
           rel.stance = 'rivalry';
           rel.grievances += 1;
           log(`Trade between ${a.name} and ${b.name} broke down amid disputes.`);
@@ -1793,10 +1882,9 @@ function updateRelations(world, rng, log) {
         break;
 
       case 'rivalry':
-        if (wd > 0.85 && pairRng.random() < 0.12) {
-          rel.stance = 'war';
-          rel.warYears = 0;
-          log(`War broke out between ${a.name} and ${b.name}.`);
+        if (wd > 0.75 && pairRng.random() < 0.15 &&
+            !(rel.truceUntil && world.year < rel.truceUntil)) {
+          startWar(world, a, b, rel, log);
         } else if (td > 0.85 && pairRng.random() < 0.1) {
           rel.stance = 'trade';
           log(`Old rivals ${a.name} and ${b.name} set enmity aside to trade.`);
@@ -1807,10 +1895,14 @@ function updateRelations(world, rng, log) {
         rel.warYears++;
         resolveWarYear(world, a, b, rel, pairRng, log);
         if (!a.alive || !b.alive) break;
-        const exhaustion = 0.08 + 0.05 * rel.warYears;
+        // Peace comes from exhaustion — sooner when a conciliatory
+        // leader holds either side.
+        let exhaustion = 0.08 + 0.05 * rel.warYears;
+        if ((a.leaderBias || 0) < -0.1 || (b.leaderBias || 0) < -0.1) {
+          exhaustion += 0.1;
+        }
         if (pairRng.random() < exhaustion) {
-          rel.stance = 'rivalry';
-          log(`${a.name} and ${b.name} made an exhausted peace.`);
+          makePeace(world, a, b, rel, pairRng, log);
         }
         break;
       }
@@ -1832,39 +1924,158 @@ function updateRelations(world, rng, log) {
   }
 }
 
+function startWar(world, a, b, rel, log, cause) {
+  rel.stance = 'war';
+  rel.warYears = 0;
+  rel.warScore = 0; // positive: a is winning; negative: b
+  log(cause || `War broke out between ${a.name} and ${b.name}.`);
+}
+
+// Can this tribe actually take and hold a town? Professional warriors, or
+// raw raiding backed by a full era's edge in metal.
+function canConquer(winner, loser) {
+  const t = winner.progress.techs;
+  if (t.has('warriors')) return true;
+  const eraEdge = ERAS.indexOf(tribeEra(winner)) - ERAS.indexOf(tribeEra(loser));
+  return t.has('raiding') && eraEdge >= 1;
+}
+
 function resolveWarYear(world, a, b, rel, rng, log) {
   const sa = militaryStrength(world, a, rng);
   const sb = militaryStrength(world, b, rng);
   const [winner, loser, sw, sl] = sa >= sb ? [a, b, sa, sb] : [b, a, sb, sa];
-  const ratio = Math.min(3, sw / Math.max(0.01, sl * defensiveBonus(loser)));
+  const ratio = Math.min(3, sw / Math.max(0.01, sl * defensiveBonus(world, loser)));
 
-  // Raid damage falls on the loser's people.
+  // Raid damage falls on the loser's people, and the year's outcome
+  // accumulates into the war score that peace terms are settled by.
   const lossRate = 0.01 * ratio;
   damageTribe(world, loser, lossRate, rng);
-  rel.grievances = Math.min(5, rel.grievances + 0.5);
+  rel.grievances = Math.min(5, rel.grievances + 0.7);
+  rel.warScore = (rel.warScore || 0) + (winner === a ? 1 : -1) * (ratio - 1);
 
   if (rel.warYears === 1 || rng.random() < 0.25) {
     log(`${winner.name} raided ${loser.name} and carried off spoils.`);
   }
 
-  // Conquest: a sustained, decisive edge flips a settlement's allegiance
-  // — the place and its people endure; only the banner changes.
+  // Conquest: a decisive edge flips a settlement's allegiance — the place
+  // and its people endure; only the banner changes. The stronger the
+  // edge, the likelier the fall.
   const loserSettlements = tribeSettlements(world, loser.id);
-  if (rel.warYears >= 3 && ratio > 1.6 &&
-      winner.progress.techs.has('warriors') && loserSettlements.length > 0 &&
-      rng.random() < 0.35) {
-    const centre = tribeCentroid(world, winner);
-    let target = loserSettlements[0];
-    let bestD = Infinity;
-    for (const s of loserSettlements) {
-      const d = (s.x - centre.x) ** 2 + (s.y - centre.y) ** 2;
-      if (d < bestD) { bestD = d; target = s; }
+  if (rel.warYears >= 2 && ratio > 1.4 && canConquer(winner, loser) &&
+      loserSettlements.length > 0 && rng.random() < 0.15 * ratio) {
+    conquerSettlement(world, winner, loser, rel, log);
+  }
+}
+
+function conquerSettlement(world, winner, loser, rel, log) {
+  const loserSettlements = tribeSettlements(world, loser.id);
+  if (loserSettlements.length === 0) return;
+  const centre = tribeCentroid(world, winner);
+  let target = loserSettlements[0];
+  let bestD = Infinity;
+  for (const s of loserSettlements) {
+    const d = (s.x - centre.x) ** 2 + (s.y - centre.y) ** 2;
+    if (d < bestD) { bestD = d; target = s; }
+  }
+  // Assimilation takes generations, longer for a cohesive conquered
+  // people; the empire cannot heal while it digests.
+  const alreadyDigesting = tribeSettlements(world, winner.id).some((s) =>
+    s.assimilatingUntil && world.year < s.assimilatingUntil);
+
+  target.tribeId = winner.id;
+  target.assimilatingUntil = world.year + Math.round(30 + 60 * loser.traits.cohesion);
+  log(`${winner.name} conquered ${target.name}; its people now answer to new masters.`);
+  rel.grievances = Math.min(5, rel.grievances + 2);
+
+  // Victory has a price: the conqueror absorbs a foreign populace. Unity
+  // falls in proportion to how much of the empire the newcomers now make
+  // up — and conquering while still digesting earlier conquests
+  // compounds the strain.
+  const ownPop = Math.max(1, totalTribePop(world, winner) - target.pop);
+  const drop = Math.min(0.35, 0.05 + 0.6 * (target.pop / ownPop)) +
+    (alreadyDigesting ? 0.08 : 0);
+  winner.unity = Math.max(0, (winner.unity ?? 1) - drop);
+  nudgeTrait(winner, 'cohesion', -0.01);
+  if (drop > 0.1) {
+    log(`The conquered masses strain ${winner.name}'s unity.`);
+  }
+
+  checkTribeDeath(world, loser, log);
+}
+
+// Peace is settled on the war score: a drawn war ends in weary rivalry, a
+// clearly lost one costs land or tribute.
+function makePeace(world, a, b, rel, rng, log) {
+  rel.stance = 'rivalry';
+  // A truce holds for a generation's better part — no immediate re-war.
+  rel.truceUntil = world.year + rng.int(8, 20);
+  const score = rel.warScore || 0;
+  const [winner, loser] = score >= 0 ? [a, b] : [b, a];
+  const magnitude = Math.abs(score);
+
+  if (magnitude > 2.5 && tribeSettlements(world, loser.id).length > 0 &&
+      canConquer(winner, loser)) {
+    log(`${a.name} and ${b.name} made peace — dictated by ${winner.name}.`);
+    conquerSettlement(world, winner, loser, rel, log);
+  } else if (magnitude > 1.2) {
+    loser.tributeTo = winner.id;
+    loser.tributeUntil = world.year + 20;
+    log(`${a.name} and ${b.name} made peace; ${loser.name} must pay tribute to ${winner.name}.`);
+  } else {
+    log(`${a.name} and ${b.name} made an exhausted peace.`);
+  }
+  rel.warScore = 0;
+}
+
+// --- Diplomatic incidents ---------------------------------------------------
+// Small sparks that history turns on: an insult at a gathering, murdered
+// envoys, a marriage feast. Their likelihood follows the two peoples'
+// tempers; their consequences run through grievances and familiarity.
+
+const INCIDENT_TEXTS = [
+  (a, b) => `An envoy of ${a.name} was humiliated at ${b.name}'s fires; the insult was not forgotten.`,
+  (a, b) => `Hunters of ${a.name} were found slain on ${b.name}'s ground.`,
+  (a, b) => `A dispute over grazing lands flared between ${a.name} and ${b.name}.`,
+  (a, b) => `${b.name} seized goods from traders of ${a.name}, calling it toll.`,
+];
+
+const GOODWILL_TEXTS = [
+  (a, b) => `${a.name} and ${b.name} sealed friendship with a marriage between leading families.`,
+  (a, b) => `Envoys of ${a.name} brought rich gifts to ${b.name}.`,
+  (a, b) => `${a.name} and ${b.name} feasted together at the season's turning.`,
+];
+
+function diplomaticEvent(world, a, b, rel, rng, log) {
+  if (rel.stance === 'war') return;
+  const avgAggression = (a.traits.aggression + b.traits.aggression) / 2;
+  const avgDiscipline = (a.traits.discipline + b.traits.discipline) / 2;
+  const avgMercantile = (a.traits.mercantile + b.traits.mercantile) / 2;
+  const avgContemplation = (a.traits.contemplation + b.traits.contemplation) / 2;
+
+  // Hot tempers and low discipline breed incidents; traders and
+  // philosophers breed goodwill.
+  const pIncident = 0.005 + 0.012 * avgAggression + 0.008 * (1 - avgDiscipline);
+  const pGoodwill = 0.005 + 0.012 * avgMercantile + 0.006 * avgContemplation;
+
+  const roll = rng.random();
+  if (roll < pIncident) {
+    rel.grievances = Math.min(5, rel.grievances + 1);
+    const text = rng.pick(INCIDENT_TEXTS)(a, b);
+    log(text);
+    // An insult can be the spark that sets smouldering rivals alight.
+    if (rel.stance === 'rivalry' &&
+        !(rel.truceUntil && world.year < rel.truceUntil) &&
+        warDesire(world, a, b, rel) > 0.7 && rng.random() < 0.35) {
+      startWar(world, a, b, rel, log,
+        `The offence set ${a.name} and ${b.name} at war.`);
+    } else if (rel.stance === 'trade' && rng.random() < 0.25) {
+      rel.stance = 'contact';
+      log(`Trade between ${a.name} and ${b.name} withered after the offence.`);
     }
-    target.tribeId = winner.id;
-    target.assimilatingUntil = world.year + Math.round(20 + 40 * loser.traits.cohesion);
-    log(`${winner.name} conquered ${target.name}; its people now answer to new masters.`);
-    rel.grievances = Math.min(5, rel.grievances + 2);
-    checkTribeDeath(world, loser, log);
+  } else if (roll < pIncident + pGoodwill) {
+    rel.grievances = Math.max(0, rel.grievances - 1);
+    rel.familiarity = Math.min(2, rel.familiarity + 0.15);
+    log(rng.pick(GOODWILL_TEXTS)(a, b));
   }
 }
 
@@ -2038,7 +2249,8 @@ function governanceStability(tribe) {
   const g = tribe.progress.governance;
   const d = tribe.traits.discipline;
   const base = { band: 1.0, chiefdom: 1.01, theocracy: 1.03, kingship: 1.03, council: 1.03, merchant: 1.03 }[g] || 1;
-  return base * (0.97 + 0.06 * d);
+  // A divided polity governs badly.
+  return base * (0.97 + 0.06 * d) * (0.94 + 0.06 * (tribe.unity ?? 1));
 }
 
 function maxSettlements(tribe) {
@@ -2077,6 +2289,8 @@ function updateGovernance(world, tribe, pop, rng, log) {
     if (rng.random() < 0.01 * (1 - tribe.traits.discipline) * 2) {
       damageTribe(world, tribe, 0.02, rng);
       nudgeTrait(tribe, 'cohesion', -0.01);
+      tribe.weakUntil = world.year + 5; // chaos invites the neighbours
+      rollLeader(world, tribe, rng, log, true);
       log(`A succession crisis convulsed ${tribe.name}.`);
     }
   }
@@ -2086,7 +2300,109 @@ function updateGovernance(world, tribe, pop, rng, log) {
       pop < tribe.peakPop * 0.5) {
     p.governance = 'chiefdom';
     tribe.peakPop = pop;
+    tribe.weakUntil = world.year + 8;
     log(`Order broke down; ${tribe.name} fell back under rival chiefs.`);
+  }
+}
+
+// --- Unity and civil war -------------------------------------------------------
+// Unity is the polity's current condition (state), distinct from cohesion
+// (the people's character, a trait). Conquest dilutes unity with
+// unabsorbed masses; time rebuilds it — faster for cohesive, disciplined
+// peoples. Deeply divided empires can tear themselves apart.
+
+function updateUnity(world, tribe) {
+  if (tribe.unity === undefined) tribe.unity = 1;
+  const settlements = tribeSettlements(world, tribe.id);
+
+  // Overextension: holding more places than the polity's governance can
+  // coordinate grinds unity down, year on year.
+  const over = Math.max(0, settlements.length - maxSettlements(tribe));
+  if (over > 0) {
+    tribe.unity = Math.max(0, tribe.unity - 0.004 * over);
+  }
+
+  // Healing is slow — generations, not years — and impossible while the
+  // empire is still digesting conquered peoples.
+  const digesting = settlements.some((s) =>
+    s.assimilatingUntil && world.year < s.assimilatingUntil);
+  if (!digesting && over === 0) {
+    const recovery = 0.0015 *
+      (0.5 + 0.5 * tribe.traits.cohesion) *
+      (0.5 + 0.5 * tribe.traits.discipline);
+    tribe.unity = Math.min(1, tribe.unity + recovery);
+  }
+}
+
+const CIVIL_WAR_UNITY = 0.4;
+
+function checkCivilWar(world, tribe, rng, log) {
+  const settlements = tribeSettlements(world, tribe.id);
+  if (settlements.length < 3 || (tribe.unity ?? 1) >= CIVIL_WAR_UNITY) return;
+
+  const p = 0.1 * ((CIVIL_WAR_UNITY - tribe.unity) / CIVIL_WAR_UNITY) *
+    (1.5 - tribe.traits.discipline);
+  if (rng.random() >= p) return;
+
+  // The empire splits: the breakaway takes roughly half the settlements,
+  // preferring the unassimilated conquests and the places farthest from
+  // the chief settlement — the periphery goes first.
+  const chief = tribeChiefSettlement(world, tribe);
+  const candidates = settlements
+    .filter((s) => s !== chief)
+    .map((s) => {
+      const dx = s.x - chief.x;
+      const dy = s.y - chief.y;
+      const foreign = s.assimilatingUntil && world.year < s.assimilatingUntil ? 1 : 0;
+      return { s, score: foreign * 1000 + dx * dx + dy * dy };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  const takeCount = Math.max(1, Math.floor(settlements.length / 2));
+  const splinter = createSplinterTribe(world, tribe, rng);
+  const taken = candidates.slice(0, takeCount).map((c) => c.s);
+  for (const s of taken) {
+    s.tribeId = splinter.id;
+    s.assimilatingUntil = undefined; // they follow the rebels willingly
+  }
+  splinter.rangeCenter = { x: taken[0].x, y: taken[0].y };
+  splinter.peakPop = totalTribePop(world, splinter);
+
+  tribe.unity = 0.7; // what remains is the coherent core
+  tribe.peakPop = totalTribePop(world, tribe);
+  tribe.weakUntil = world.year + 6;
+
+  // Civil war: the halves part in blood, not peace.
+  const key = relationKey(tribe.id, splinter.id);
+  world.relations[key] = {
+    stance: 'war', familiarity: 1.5, grievances: 3, warYears: 0, warScore: 0,
+  };
+  log(`Civil war! ${splinter.name} broke away from ${tribe.name}, ` +
+    `taking ${taken.length} settlement${taken.length > 1 ? 's' : ''}.`);
+}
+
+// --- Leaders -----------------------------------------------------------------
+// Each tribe is led by someone — abstracted to a single temperament in
+// [-0.3, 0.3]: negative leans to peace, positive hungers for war. Leaders
+// pass in time (or fall in succession crises), and a change at the top
+// can tip a standing rivalry into war, or a war into peace.
+
+function rollLeader(world, tribe, rng, log, forced = false) {
+  const due = !tribe.leaderSince ||
+    world.year - tribe.leaderSince >= (tribe.leaderTerm || 0);
+  if (!due && !forced) return;
+
+  // Temperament centres on the people's own aggression.
+  const lean = (tribe.traits.aggression - 0.5) * 0.2;
+  tribe.leaderBias = Math.max(-0.3, Math.min(0.3, lean + rng.range(-0.2, 0.2)));
+  tribe.leaderSince = world.year;
+  tribe.leaderTerm = rng.int(12, 35);
+
+  // Only notable temperaments make the chronicle.
+  if (world.year > 0 && tribe.leaderBias > 0.12) {
+    log(`A new leader rose among ${tribe.name}, hungry for glory in war.`);
+  } else if (world.year > 0 && tribe.leaderBias < -0.12) {
+    log(`A new leader rose among ${tribe.name}, minded toward peace.`);
   }
 }
 
@@ -2149,12 +2465,26 @@ function updateBands(world, tribe, rng, seasonFactor, log) {
 function updateSettlements(world, tribe, rng, seasonFactor, log) {
   const settlements = tribeSettlements(world, tribe.id);
   const stability = governanceStability(tribe);
-  const prosperity = tribe.tradePartners > 0 ? 1.15 : 1;
+  let prosperity = tribe.tradePartners > 0 ? 1.15 : 1;
+  // Tribute drains the payer.
+  if (tribe.tributeTo !== undefined && world.year < tribe.tributeUntil) {
+    prosperity *= 0.94;
+  }
+  // A disunited people work against each other.
+  prosperity *= 0.8 + 0.2 * (tribe.unity ?? 1);
 
   for (const s of settlements) {
     const cap = Math.max(20, settlementCapacity(world, s, tribe) * seasonFactor);
     let r = 0.008 * stability * prosperity * varianceRoll(rng, tribe.traits);
-    if (s.assimilatingUntil && world.year < s.assimilatingUntil) r *= 0.4;
+    if (s.assimilatingUntil) {
+      if (world.year < s.assimilatingUntil) {
+        r *= 0.4;
+      } else {
+        // The conquered have become one people with their conquerors.
+        s.assimilatingUntil = undefined;
+        tribe.unity = Math.min(1, (tribe.unity ?? 1) + 0.05);
+      }
+    }
     s.pop = Math.max(0, s.pop + r * s.pop * (1 - s.pop / cap));
   }
 
@@ -2239,7 +2569,9 @@ function simulateYear(world) {
     log('A mild year with rich harvests of forage and game.');
   }
 
-  for (const tribe of world.tribes) {
+  // Snapshot: a civil war can add a splinter tribe mid-year; it begins
+  // living its own years from the next tick.
+  for (const tribe of [...world.tribes]) {
     if (!tribe.alive) continue;
     const tribeRng = rng.fork('tribe:' + tribe.id);
 
@@ -2284,8 +2616,16 @@ function simulateYear(world) {
     }
 
     // Society.
+    rollLeader(world, tribe, tribeRng.fork('leader'), log);
     updateGovernance(world, tribe, totalTribePop(world, tribe), tribeRng.fork('gov'), log);
+    updateUnity(world, tribe);
+    checkCivilWar(world, tribe, tribeRng.fork('civil'), log);
     driftTraits(tribe, tribeRng.fork('drift'));
+
+    // Tribute runs out.
+    if (tribe.tributeTo !== undefined && tribe.tributeUntil <= world.year) {
+      tribe.tributeTo = undefined;
+    }
 
     checkTribeDeath(world, tribe, log);
   }
@@ -2539,6 +2879,61 @@ function satelliteColor(world, x, y, i) {
   return [r, g, b];
 }
 
+// What settlement actually looks like from above: built-up ground at the
+// core, worked fields around it. Returns per-tile intensities.
+function computeVisibleDevelopment(world) {
+  const { size } = world;
+  const urban = new Float32Array(size * size);
+  const fields = new Float32Array(size * size);
+  if (!world.settlements || world.settlements.length === 0) {
+    return { urban, fields };
+  }
+  computeFoodValues(world); // for farmValue: fields only appear on arable land
+
+  for (const s of world.settlements) {
+    const tribe = world.tribes[s.tribeId];
+    if (!tribe || !tribe.alive) continue;
+
+    // Built-up core: grows with population, visible from ~a village up.
+    const uR = Math.min(3, 0.6 + Math.sqrt(s.pop) / 25);
+    const uStrength = Math.min(1, s.pop / 500);
+    const uri = Math.ceil(uR);
+    for (let dy = -uri; dy <= uri; dy++) {
+      for (let dx = -uri; dx <= uri; dx++) {
+        const x = s.x + dx;
+        const y = s.y + dy;
+        if (x < 0 || y < 0 || x >= size || y >= size) continue;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d > uR) continue;
+        const i = y * size + x;
+        if (isWater(world.terrain[i])) continue;
+        urban[i] = Math.max(urban[i], uStrength * (1 - d / (uR + 0.5)));
+      }
+    }
+
+    // Field patchwork: only for farming peoples, only on arable tiles,
+    // hugging the settlement rather than blanketing the region.
+    if (tribe.progress.techs.has('agriculture') && !s.proto) {
+      const fR = Math.min(6, 1.5 + Math.sqrt(s.pop) / 14);
+      const fStrength = Math.min(1, s.pop / 400);
+      const fri = Math.ceil(fR);
+      for (let dy = -fri; dy <= fri; dy++) {
+        for (let dx = -fri; dx <= fri; dx++) {
+          const x = s.x + dx;
+          const y = s.y + dy;
+          if (x < 0 || y < 0 || x >= size || y >= size) continue;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d > fR) continue;
+          const i = y * size + x;
+          if (world.farmValue[i] < 8 || isWater(world.terrain[i])) continue;
+          fields[i] = Math.max(fields[i], fStrength * Math.pow(1 - d / (fR + 0.5), 1.4));
+        }
+      }
+    }
+  }
+  return { urban, fields };
+}
+
 function buildBaseLayer(world, view) {
   const { size } = world;
   const worldPx = size * TILE_PX;
@@ -2556,6 +2951,10 @@ function buildBaseLayer(world, view) {
 
   const resourceView = view === 'minerals' || view === 'natural';
   const tribeRgb = (world.tribes || []).map((t) => hexToRgb(t.color));
+
+  // The satellite view shows civilization as it would actually look from
+  // above: built-up cores and worked fields, part of the landscape itself.
+  const dev = view === 'satellite' ? computeVisibleDevelopment(world) : null;
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -2626,6 +3025,25 @@ function buildBaseLayer(world, view) {
       } else {
         // satellite
         [r, g, b] = satelliteColor(world, x, y, i);
+
+        // Worked fields: a tan patchwork over arable land, hashed per
+        // tile so adjacent fields read as separate plots.
+        if (dev && dev.fields[i] > 0.04) {
+          const h = (i * 2654435761) >>> 0;
+          const vary = ((h & 31) - 16) * 1.4;
+          const a = Math.min(0.68, dev.fields[i] * 0.75);
+          r = r * (1 - a) + (196 + vary) * a;
+          g = g * (1 - a) + (176 + vary * 0.8) * a;
+          b = b * (1 - a) + (96 + vary * 0.5) * a;
+        }
+        // Built-up ground: a distinct earthen brown, strengthening with
+        // population so towns read as towns against any terrain.
+        if (dev && dev.urban[i] > 0.04) {
+          const a = Math.min(0.92, dev.urban[i]);
+          r = r * (1 - a) + 122 * a;
+          g = g * (1 - a) + 104 * a;
+          b = b * (1 - a) + 86 * a;
+        }
       }
 
       // Fill the TILE_PX x TILE_PX block
@@ -2646,7 +3064,7 @@ function buildBaseLayer(world, view) {
 
 // --- Frame ----------------------------------------------------------------
 
-function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBase = true) {
+function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBase = true, overlays = {}) {
   camera = clampCamera(world, camera || createCamera());
 
   const key = `${world.seed}|${view}`;
@@ -2680,10 +3098,10 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
 
   const resourceView = view === 'minerals' || view === 'natural';
 
-  // Resource markers: all of them on the satellite view, a single filtered
-  // category (drawn larger, with an outline) on the resource views. They
-  // mark individual tiles, so they scale with the tiles.
-  if (view === 'satellite' || resourceView) {
+  // Resource markers: an optional overlay on the satellite view, a single
+  // filtered category (drawn larger, with an outline) on the resource
+  // views. They mark individual tiles, so they scale with the tiles.
+  if ((view === 'satellite' && overlays.resources) || resourceView) {
     const filter = view === 'minerals' ? 'mineral'
       : view === 'natural' ? 'natural' : null;
     const radius = (resourceView ? TILE_PX * 0.75 : TILE_PX * 0.42) * t.scale;
@@ -2708,10 +3126,12 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
   }
 
   // Settlements (places) and bands (nomadic presences) are drawn on the
-  // satellite, communities and development views, coloured by the tribe
-  // they answer to. Settled markers are solid and scale with population;
-  // bands are small open rings — people passing through, not places.
-  const peopleView = view === 'satellite' || view === 'communities' || view === 'development';
+  // communities and development views, and on satellite as an optional
+  // overlay — by default the satellite shows only what is physically
+  // visible. Settled markers are solid and scale with population; bands
+  // are small open rings — people passing through, not places.
+  const peopleView = (view === 'satellite' && overlays.settlements) ||
+    view === 'communities' || view === 'development';
   if (peopleView && (world.settlements || world.bands)) {
     const markerScale = Math.sqrt(camera.zoom);
     const markerRadius = (pop) => (2.5 + Math.sqrt(pop) / 5) * markerScale;
@@ -2813,6 +3233,9 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
   let world = null;
   let camera = createCamera();
   let selectedTribeId = null;
+  // Satellite overlays are off by default: the view shows only what is
+  // physically visible from above.
+  const overlays = { resources: false, settlements: false };
 
   function formatPop(n) {
     n = Math.round(n);
@@ -2894,8 +3317,11 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
     const p = t.progress;
     const posture = computePosture(t.traits);
     const era = ERA_LABELS[tribeEra(t)];
-    const arch = t.archetype === 'random' ? 'A people of their own kind'
+    let arch = t.archetype === 'random' ? 'A people of their own kind'
       : `${ARCHETYPES[t.archetype].label} archetype`;
+    if (t.parentId !== undefined && world.tribes[t.parentId]) {
+      arch = `Broke away from ${world.tribes[t.parentId].name}`;
+    }
 
     const traitRows = TRAIT_KEYS.map((key) =>
       `<div class="trait-row"><span class="trait-name">${TRAIT_LABELS[key]}</span>` +
@@ -2924,6 +3350,13 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
       `<span>⚖ ${(posture.trade * 100).toFixed(0)}%</span>` +
       `<span>📜 ${(posture.learning * 100).toFixed(0)}%</span></div>` +
       traitRows +
+      `<div class="insp-section"><strong>Unity:</strong> ${(100 * (t.unity ?? 1)).toFixed(0)}%${
+        (t.unity ?? 1) < 0.35 ? ' — on the brink of civil war' : ''}</div>` +
+      `<div class="insp-section"><strong>Leadership:</strong> ${
+        (t.leaderBias || 0) > 0.12 ? 'war-hungry'
+          : (t.leaderBias || 0) < -0.12 ? 'peace-minded' : 'steady'
+      }${t.tributeTo !== undefined && world.tribes[t.tributeTo]
+        ? ` · pays tribute to ${world.tribes[t.tributeTo].name}` : ''}</div>` +
       `<div class="insp-section"><strong>Technologies:</strong> ${techNames.join(', ') || 'none'}</div>` +
       `<div class="insp-section"><strong>Researching:</strong> ${target}</div>` +
       `<div class="insp-section"><strong>Art:</strong> ${ART_STAGES[p.artStage]} · ` +
@@ -2944,14 +3377,14 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
   // Full refresh: repaints the tile layer too (world or simulation changed).
   function refreshView() {
     const view = viewSelect.value;
-    renderWorld(world, canvas, view, camera, true);
+    renderWorld(world, canvas, view, camera, true, overlays);
     renderLegends(view);
     updateZoomUI();
   }
 
   // Cheap refresh for panning and zooming: reuses the cached tile layer.
   function redraw() {
-    renderWorld(world, canvas, viewSelect.value, camera, false);
+    renderWorld(world, canvas, viewSelect.value, camera, false, overlays);
     updateZoomUI();
   }
 
@@ -3055,8 +3488,27 @@ function renderWorld(world, canvas, view = 'satellite', camera = null, rebuildBa
         `<span>${ERA_LABELS[era]}</span></div>`).join('');
       legendBTitle.textContent = '';
       resourceLegend.innerHTML = '';
+    } else if (view === 'satellite') {
+      legendATitle.textContent = 'Terrain';
+      terrainLegend.innerHTML = terrainSwatchRows() +
+        `<div class="legend-row"><span class="swatch" style="background: rgb(142,132,118)"></span><span>Built-up ground</span></div>` +
+        `<div class="legend-row"><span class="swatch" style="background: rgb(188,172,104)"></span><span>Worked fields</span></div>`;
+      legendBTitle.textContent = 'Overlays';
+      resourceLegend.innerHTML =
+        `<label class="legend-row toggle-row"><input type="checkbox" id="toggle-resources"${overlays.resources ? ' checked' : ''}> Resource markers</label>` +
+        `<label class="legend-row toggle-row"><input type="checkbox" id="toggle-settlements"${overlays.settlements ? ' checked' : ''}> Settlement markers</label>` +
+        (overlays.resources ? resourceSwatchRows() : '');
+      document.getElementById('toggle-resources').addEventListener('change', (ev) => {
+        overlays.resources = ev.target.checked;
+        redraw();
+        renderLegends('satellite');
+      });
+      document.getElementById('toggle-settlements').addEventListener('change', (ev) => {
+        overlays.settlements = ev.target.checked;
+        redraw();
+      });
     } else {
-      // satellite / elevation
+      // elevation
       legendATitle.textContent = 'Terrain';
       terrainLegend.innerHTML = terrainSwatchRows();
       legendBTitle.textContent = 'Resources';

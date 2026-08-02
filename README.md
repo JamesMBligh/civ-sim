@@ -114,7 +114,11 @@ folder.
 - **Seed** — type a seed and press Generate to recreate a specific island.
 - **Random** — generate a fresh island with a new seed.
 - **View** — switch between seven map layers:
-  - *Satellite* — terrain with hillshading and all resource markers
+  - *Satellite* — the island as it would actually look from above:
+    terrain with hillshading, plus the visible marks of civilization —
+    built-up ground at settlements and a tan patchwork of worked
+    fields, growing as populations grow. Resource and settlement
+    markers are off by default; toggle them from the legend.
   - *Communities* — the extent of each tribe's influence, with camps
     and tribe names
   - *Elevation* — raw heightmap (ocean depths to peaks)

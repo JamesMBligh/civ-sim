@@ -84,21 +84,43 @@ function tradeDesire(world, a, b, rel) {
       !x.resourceAccess.has(r) && y.resourceAccess.has(r));
     if (wants) d += 0.15;
   }
+  // Belligerent leaders sour commerce; conciliatory ones court it.
+  d -= 0.3 * Math.max(0, (a.leaderBias || 0) + (b.leaderBias || 0));
   return d - 0.1 * rel.grievances;
 }
 
-function warDesire(world, a, b, rel) {
-  let d = 0.5 * (a.traits.aggression + b.traits.aggression)
-    + 0.3 * (a.traits.cohesion + b.traits.cohesion) / 2
-    + 0.12 * rel.grievances
-    - 0.25 * Math.min(1, rel.familiarity);
+// War appetite is directional: what X wants against Y. Strength preys on
+// weakness (opportunism), leaders tilt the scales, and a neighbour's
+// moment of internal chaos is an invitation. Familiarity soothes, but
+// only so much — old neighbours can still come to blows.
+function directionalWarDesire(world, x, y, rel) {
+  let d = 0.45 * x.traits.aggression
+    + 0.2 * x.traits.cohesion
+    + 0.1 * rel.grievances
+    - 0.12 * Math.min(1, rel.familiarity)
+    + (x.leaderBias || 0);
+
+  // Opportunism: dominant tribes pressure weaker neighbours.
+  const px = totalTribePop(world, x);
+  const py = Math.max(1, totalTribePop(world, y));
+  const powerRatio = px / py;
+  if (powerRatio > 1.4) d += Math.min(0.3, 0.12 * (powerRatio - 1.4));
+
+  // Weakness invites attack: crises leave a window of vulnerability.
+  if (y.weakUntil && world.year < y.weakUntil) d += 0.2;
+
   // Resource envy: a martial people locked out of the metals.
-  for (const [x, y] of [[a, b], [b, a]]) {
-    const envy = ['tin', 'copper', 'iron'].some((r) =>
-      !x.resourceAccess.has(r) && y.resourceAccess.has(r));
-    if (envy && computePosture(x.traits).military > 0.38) d += 0.2;
-  }
+  const envy = ['tin', 'copper', 'iron'].some((r) =>
+    !x.resourceAccess.has(r) && y.resourceAccess.has(r));
+  if (envy && computePosture(x.traits).military > 0.36) d += 0.2;
+
   return d;
+}
+
+function warDesire(world, a, b, rel) {
+  return Math.max(
+    directionalWarDesire(world, a, b, rel),
+    directionalWarDesire(world, b, a, rel));
 }
 
 // Military strength for a raid/battle roll. Discipline helps organised
@@ -119,9 +141,12 @@ function militaryStrength(world, tribe, rng) {
     varianceRoll(rng, tribe.traits);
 }
 
-function defensiveBonus(tribe) {
-  return tribe.progress.techs.has('fortifications')
+function defensiveBonus(world, tribe) {
+  let bonus = tribe.progress.techs.has('fortifications')
     ? 1.2 + 0.3 * tribe.traits.discipline : 1;
+  // A people defending their last town fight with their backs to it.
+  if (tribeSettlements(world, tribe.id).length === 1) bonus *= 1.35;
+  return bonus;
 }
 
 // Yearly relations pass: stance transitions, trade effects, war damage,
@@ -138,9 +163,14 @@ function updateRelations(world, rng, log) {
     if (!a || !b || !a.alive || !b.alive) continue;
 
     const pairRng = rng.fork(`rel:${key}`);
-    rel.familiarity = Math.min(2, rel.familiarity +
-      (rel.stance === 'trade' ? 0.04 : rel.stance === 'war' ? 0.01 : 0.02));
-    rel.grievances = Math.max(0, rel.grievances - 0.02); // old wounds fade
+    // Familiarity grows through peaceful contact and erodes in hostility.
+    rel.familiarity = Math.max(0, Math.min(2, rel.familiarity +
+      (rel.stance === 'trade' ? 0.04
+        : rel.stance === 'contact' ? 0.02 : -0.01)));
+    rel.grievances = Math.max(0, rel.grievances - 0.01); // old wounds fade slowly
+
+    // Diplomatic incidents: chance sparks that history turns on.
+    diplomaticEvent(world, a, b, rel, pairRng, log);
 
     const td = tradeDesire(world, a, b, rel);
     const wd = warDesire(world, a, b, rel);
@@ -150,14 +180,14 @@ function updateRelations(world, rng, log) {
         if (td > 0.75 && pairRng.random() < 0.25) {
           rel.stance = 'trade';
           log(`${a.name} and ${b.name} began to trade.`);
-        } else if (wd > 0.7 && pairRng.random() < 0.15) {
+        } else if (wd > 0.65 && pairRng.random() < 0.15) {
           rel.stance = 'rivalry';
           log(`Rivalry hardened between ${a.name} and ${b.name}.`);
         }
         break;
 
       case 'trade':
-        if (wd > 0.95 && pairRng.random() < 0.1) {
+        if (wd > 0.9 && pairRng.random() < 0.1) {
           rel.stance = 'rivalry';
           rel.grievances += 1;
           log(`Trade between ${a.name} and ${b.name} broke down amid disputes.`);
@@ -167,10 +197,9 @@ function updateRelations(world, rng, log) {
         break;
 
       case 'rivalry':
-        if (wd > 0.85 && pairRng.random() < 0.12) {
-          rel.stance = 'war';
-          rel.warYears = 0;
-          log(`War broke out between ${a.name} and ${b.name}.`);
+        if (wd > 0.75 && pairRng.random() < 0.15 &&
+            !(rel.truceUntil && world.year < rel.truceUntil)) {
+          startWar(world, a, b, rel, log);
         } else if (td > 0.85 && pairRng.random() < 0.1) {
           rel.stance = 'trade';
           log(`Old rivals ${a.name} and ${b.name} set enmity aside to trade.`);
@@ -181,10 +210,14 @@ function updateRelations(world, rng, log) {
         rel.warYears++;
         resolveWarYear(world, a, b, rel, pairRng, log);
         if (!a.alive || !b.alive) break;
-        const exhaustion = 0.08 + 0.05 * rel.warYears;
+        // Peace comes from exhaustion — sooner when a conciliatory
+        // leader holds either side.
+        let exhaustion = 0.08 + 0.05 * rel.warYears;
+        if ((a.leaderBias || 0) < -0.1 || (b.leaderBias || 0) < -0.1) {
+          exhaustion += 0.1;
+        }
         if (pairRng.random() < exhaustion) {
-          rel.stance = 'rivalry';
-          log(`${a.name} and ${b.name} made an exhausted peace.`);
+          makePeace(world, a, b, rel, pairRng, log);
         }
         break;
       }
@@ -206,39 +239,158 @@ function updateRelations(world, rng, log) {
   }
 }
 
+function startWar(world, a, b, rel, log, cause) {
+  rel.stance = 'war';
+  rel.warYears = 0;
+  rel.warScore = 0; // positive: a is winning; negative: b
+  log(cause || `War broke out between ${a.name} and ${b.name}.`);
+}
+
+// Can this tribe actually take and hold a town? Professional warriors, or
+// raw raiding backed by a full era's edge in metal.
+function canConquer(winner, loser) {
+  const t = winner.progress.techs;
+  if (t.has('warriors')) return true;
+  const eraEdge = ERAS.indexOf(tribeEra(winner)) - ERAS.indexOf(tribeEra(loser));
+  return t.has('raiding') && eraEdge >= 1;
+}
+
 function resolveWarYear(world, a, b, rel, rng, log) {
   const sa = militaryStrength(world, a, rng);
   const sb = militaryStrength(world, b, rng);
   const [winner, loser, sw, sl] = sa >= sb ? [a, b, sa, sb] : [b, a, sb, sa];
-  const ratio = Math.min(3, sw / Math.max(0.01, sl * defensiveBonus(loser)));
+  const ratio = Math.min(3, sw / Math.max(0.01, sl * defensiveBonus(world, loser)));
 
-  // Raid damage falls on the loser's people.
+  // Raid damage falls on the loser's people, and the year's outcome
+  // accumulates into the war score that peace terms are settled by.
   const lossRate = 0.01 * ratio;
   damageTribe(world, loser, lossRate, rng);
-  rel.grievances = Math.min(5, rel.grievances + 0.5);
+  rel.grievances = Math.min(5, rel.grievances + 0.7);
+  rel.warScore = (rel.warScore || 0) + (winner === a ? 1 : -1) * (ratio - 1);
 
   if (rel.warYears === 1 || rng.random() < 0.25) {
     log(`${winner.name} raided ${loser.name} and carried off spoils.`);
   }
 
-  // Conquest: a sustained, decisive edge flips a settlement's allegiance
-  // — the place and its people endure; only the banner changes.
+  // Conquest: a decisive edge flips a settlement's allegiance — the place
+  // and its people endure; only the banner changes. The stronger the
+  // edge, the likelier the fall.
   const loserSettlements = tribeSettlements(world, loser.id);
-  if (rel.warYears >= 3 && ratio > 1.6 &&
-      winner.progress.techs.has('warriors') && loserSettlements.length > 0 &&
-      rng.random() < 0.35) {
-    const centre = tribeCentroid(world, winner);
-    let target = loserSettlements[0];
-    let bestD = Infinity;
-    for (const s of loserSettlements) {
-      const d = (s.x - centre.x) ** 2 + (s.y - centre.y) ** 2;
-      if (d < bestD) { bestD = d; target = s; }
+  if (rel.warYears >= 2 && ratio > 1.4 && canConquer(winner, loser) &&
+      loserSettlements.length > 0 && rng.random() < 0.15 * ratio) {
+    conquerSettlement(world, winner, loser, rel, log);
+  }
+}
+
+function conquerSettlement(world, winner, loser, rel, log) {
+  const loserSettlements = tribeSettlements(world, loser.id);
+  if (loserSettlements.length === 0) return;
+  const centre = tribeCentroid(world, winner);
+  let target = loserSettlements[0];
+  let bestD = Infinity;
+  for (const s of loserSettlements) {
+    const d = (s.x - centre.x) ** 2 + (s.y - centre.y) ** 2;
+    if (d < bestD) { bestD = d; target = s; }
+  }
+  // Assimilation takes generations, longer for a cohesive conquered
+  // people; the empire cannot heal while it digests.
+  const alreadyDigesting = tribeSettlements(world, winner.id).some((s) =>
+    s.assimilatingUntil && world.year < s.assimilatingUntil);
+
+  target.tribeId = winner.id;
+  target.assimilatingUntil = world.year + Math.round(30 + 60 * loser.traits.cohesion);
+  log(`${winner.name} conquered ${target.name}; its people now answer to new masters.`);
+  rel.grievances = Math.min(5, rel.grievances + 2);
+
+  // Victory has a price: the conqueror absorbs a foreign populace. Unity
+  // falls in proportion to how much of the empire the newcomers now make
+  // up — and conquering while still digesting earlier conquests
+  // compounds the strain.
+  const ownPop = Math.max(1, totalTribePop(world, winner) - target.pop);
+  const drop = Math.min(0.35, 0.05 + 0.6 * (target.pop / ownPop)) +
+    (alreadyDigesting ? 0.08 : 0);
+  winner.unity = Math.max(0, (winner.unity ?? 1) - drop);
+  nudgeTrait(winner, 'cohesion', -0.01);
+  if (drop > 0.1) {
+    log(`The conquered masses strain ${winner.name}'s unity.`);
+  }
+
+  checkTribeDeath(world, loser, log);
+}
+
+// Peace is settled on the war score: a drawn war ends in weary rivalry, a
+// clearly lost one costs land or tribute.
+function makePeace(world, a, b, rel, rng, log) {
+  rel.stance = 'rivalry';
+  // A truce holds for a generation's better part — no immediate re-war.
+  rel.truceUntil = world.year + rng.int(8, 20);
+  const score = rel.warScore || 0;
+  const [winner, loser] = score >= 0 ? [a, b] : [b, a];
+  const magnitude = Math.abs(score);
+
+  if (magnitude > 2.5 && tribeSettlements(world, loser.id).length > 0 &&
+      canConquer(winner, loser)) {
+    log(`${a.name} and ${b.name} made peace — dictated by ${winner.name}.`);
+    conquerSettlement(world, winner, loser, rel, log);
+  } else if (magnitude > 1.2) {
+    loser.tributeTo = winner.id;
+    loser.tributeUntil = world.year + 20;
+    log(`${a.name} and ${b.name} made peace; ${loser.name} must pay tribute to ${winner.name}.`);
+  } else {
+    log(`${a.name} and ${b.name} made an exhausted peace.`);
+  }
+  rel.warScore = 0;
+}
+
+// --- Diplomatic incidents ---------------------------------------------------
+// Small sparks that history turns on: an insult at a gathering, murdered
+// envoys, a marriage feast. Their likelihood follows the two peoples'
+// tempers; their consequences run through grievances and familiarity.
+
+const INCIDENT_TEXTS = [
+  (a, b) => `An envoy of ${a.name} was humiliated at ${b.name}'s fires; the insult was not forgotten.`,
+  (a, b) => `Hunters of ${a.name} were found slain on ${b.name}'s ground.`,
+  (a, b) => `A dispute over grazing lands flared between ${a.name} and ${b.name}.`,
+  (a, b) => `${b.name} seized goods from traders of ${a.name}, calling it toll.`,
+];
+
+const GOODWILL_TEXTS = [
+  (a, b) => `${a.name} and ${b.name} sealed friendship with a marriage between leading families.`,
+  (a, b) => `Envoys of ${a.name} brought rich gifts to ${b.name}.`,
+  (a, b) => `${a.name} and ${b.name} feasted together at the season's turning.`,
+];
+
+function diplomaticEvent(world, a, b, rel, rng, log) {
+  if (rel.stance === 'war') return;
+  const avgAggression = (a.traits.aggression + b.traits.aggression) / 2;
+  const avgDiscipline = (a.traits.discipline + b.traits.discipline) / 2;
+  const avgMercantile = (a.traits.mercantile + b.traits.mercantile) / 2;
+  const avgContemplation = (a.traits.contemplation + b.traits.contemplation) / 2;
+
+  // Hot tempers and low discipline breed incidents; traders and
+  // philosophers breed goodwill.
+  const pIncident = 0.005 + 0.012 * avgAggression + 0.008 * (1 - avgDiscipline);
+  const pGoodwill = 0.005 + 0.012 * avgMercantile + 0.006 * avgContemplation;
+
+  const roll = rng.random();
+  if (roll < pIncident) {
+    rel.grievances = Math.min(5, rel.grievances + 1);
+    const text = rng.pick(INCIDENT_TEXTS)(a, b);
+    log(text);
+    // An insult can be the spark that sets smouldering rivals alight.
+    if (rel.stance === 'rivalry' &&
+        !(rel.truceUntil && world.year < rel.truceUntil) &&
+        warDesire(world, a, b, rel) > 0.7 && rng.random() < 0.35) {
+      startWar(world, a, b, rel, log,
+        `The offence set ${a.name} and ${b.name} at war.`);
+    } else if (rel.stance === 'trade' && rng.random() < 0.25) {
+      rel.stance = 'contact';
+      log(`Trade between ${a.name} and ${b.name} withered after the offence.`);
     }
-    target.tribeId = winner.id;
-    target.assimilatingUntil = world.year + Math.round(20 + 40 * loser.traits.cohesion);
-    log(`${winner.name} conquered ${target.name}; its people now answer to new masters.`);
-    rel.grievances = Math.min(5, rel.grievances + 2);
-    checkTribeDeath(world, loser, log);
+  } else if (roll < pIncident + pGoodwill) {
+    rel.grievances = Math.max(0, rel.grievances - 1);
+    rel.familiarity = Math.min(2, rel.familiarity + 0.15);
+    log(rng.pick(GOODWILL_TEXTS)(a, b));
   }
 }
 
