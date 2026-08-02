@@ -14,6 +14,7 @@ function createWorld(seedString) {
     kmPerTile: KM_PER_TILE,
     elevation: null,   // Float32Array, 0..1, sea level at 0.5
     moisture: null,    // Float32Array, 0..1
+    temperature: null, // Float32Array, average annual °C
     terrain: null,     // Array of TERRAIN values
     riverFlow: null,   // Uint16Array flow volume
     resources: null,   // Array of RESOURCES entries or null
@@ -61,6 +62,7 @@ function tileAt(world, x, y) {
     terrain: world.terrain[i],
     elevation: world.elevation[i],
     moisture: world.moisture[i],
+    temperature: world.temperature[i],
     resource: world.resources[i],
     riverFlow: world.riverFlow[i],
   };

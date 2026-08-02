@@ -15,6 +15,8 @@ plausible Earth-like landscape:
   plains and coasts.
 - **Moisture** with a prevailing wind direction: the windward side of the
   island is wetter (forests, marshes), the leeward side drier (plains).
+- **Temperature** that falls from south to north and with altitude
+  (~6.5°C per 1000 m), so the highlands run cold.
 - **Rivers** that spring in the highlands and flow downhill to the sea,
   merging with each other and forming small lakes in depressions.
 - **Resources** placed where they'd plausibly occur: ores and stone in the
@@ -38,7 +40,14 @@ python3 -m http.server 8000
 
 - **Seed** — type a seed and press Generate to recreate a specific island.
 - **Random** — generate a fresh island with a new seed.
-- **View** — switch between terrain, raw elevation and moisture views.
+- **View** — switch between six map layers:
+  - *Satellite* — terrain with hillshading and all resource markers
+  - *Elevation* — raw heightmap (ocean depths to peaks)
+  - *Avg rainfall* — annual rainfall from moisture (400–2800 mm)
+  - *Avg temperature* — annual mean temperature (latitude + altitude)
+  - *Natural resources* — fish, game, timber and fertile soil over a
+    desaturated base map
+  - *Mineral resources* — stone, copper, iron, clay and salt deposits
 - **Hover** the map to inspect any tile (terrain, elevation, moisture,
   resource).
 

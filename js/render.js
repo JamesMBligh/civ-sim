@@ -33,7 +33,56 @@ const TERRAIN_LABELS = {
   [TERRAIN.RIVER]: 'River',
 };
 
-function renderWorld(world, canvas, view = 'terrain') {
+// Linear interpolation across a multi-stop color ramp; t in 0..1.
+function rampColor(stops, t) {
+  t = Math.max(0, Math.min(1, t));
+  const seg = t * (stops.length - 1);
+  const i = Math.min(stops.length - 2, Math.floor(seg));
+  const f = seg - i;
+  const a = stops[i];
+  const b = stops[i + 1];
+  return [
+    a[0] + (b[0] - a[0]) * f,
+    a[1] + (b[1] - a[1]) * f,
+    a[2] + (b[2] - a[2]) * f,
+  ];
+}
+
+// Display ranges for the climate views.
+const RAINFALL_RANGE = { min: 400, max: 2800 };   // mm/year
+const TEMPERATURE_RANGE = { min: -2, max: 14 };   // °C
+
+const RAINFALL_RAMP = [
+  [214, 190, 130],  // dry: parched tan
+  [150, 180, 100],  // moderate: green
+  [60, 140, 120],   // wet: teal
+  [30, 80, 170],    // very wet: deep blue
+];
+
+const TEMPERATURE_RAMP = [
+  [70, 90, 200],    // cold: blue
+  [110, 180, 210],  // cool: cyan
+  [220, 215, 120],  // mild: yellow
+  [225, 130, 60],   // warm: orange
+  [190, 40, 40],    // hot: red
+];
+
+function satelliteColor(world, x, y, i) {
+  const t = world.terrain[i];
+  let [r, g, b] = TERRAIN_COLORS[t] || [255, 0, 255];
+
+  // Hill-shade land by elevation for a bit of relief.
+  if (!isWater(t)) {
+    const e = world.elevation[i];
+    const west = x > 0 ? world.elevation[i - 1] : e;
+    const slope = (e - west) * 8;
+    const shade = 1 + Math.max(-0.25, Math.min(0.25, slope));
+    r *= shade; g *= shade; b *= shade;
+  }
+  return [r, g, b];
+}
+
+function renderWorld(world, canvas, view = 'satellite') {
   const { size } = world;
   canvas.width = size * TILE_PX;
   canvas.height = size * TILE_PX;
@@ -42,10 +91,13 @@ function renderWorld(world, canvas, view = 'terrain') {
   const img = ctx.createImageData(canvas.width, canvas.height);
   const data = img.data;
 
+  const resourceView = view === 'minerals' || view === 'natural';
+
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const i = y * size + x;
       let r, g, b;
+      const sea = isSea(world.terrain[i]);
 
       if (view === 'elevation') {
         const e = world.elevation[i];
@@ -58,23 +110,32 @@ function renderWorld(world, canvas, view = 'terrain') {
           const t = (e - 0.5) / 0.5;
           r = 60 + 175 * t; g = 130 + 105 * t; b = 60 + 175 * t;
         }
-      } else if (view === 'moisture') {
-        const m = world.moisture[i];
-        const sea = isSea(world.terrain[i]);
-        if (sea) { r = 25; g = 35; b = 50; }
-        else { r = 200 - 160 * m; g = 170 - 60 * m; b = 60 + 160 * m; }
-      } else {
-        const t = world.terrain[i];
-        [r, g, b] = TERRAIN_COLORS[t] || [255, 0, 255];
-
-        // Hill-shade land by elevation for a bit of relief.
-        if (!isWater(t)) {
-          const e = world.elevation[i];
-          const west = x > 0 ? world.elevation[i - 1] : e;
-          const slope = (e - west) * 8;
-          const shade = 1 + Math.max(-0.25, Math.min(0.25, slope));
-          r *= shade; g *= shade; b *= shade;
+      } else if (view === 'rainfall') {
+        if (sea) { r = 22; g = 30; b = 44; }
+        else {
+          const mm = moistureToRainfallMm(world.moisture[i]);
+          const t = (mm - RAINFALL_RANGE.min) / (RAINFALL_RANGE.max - RAINFALL_RANGE.min);
+          [r, g, b] = rampColor(RAINFALL_RAMP, t);
         }
+      } else if (view === 'temperature') {
+        if (sea) { r = 22; g = 30; b = 44; }
+        else {
+          const c = world.temperature[i];
+          const t = (c - TEMPERATURE_RANGE.min) / (TEMPERATURE_RANGE.max - TEMPERATURE_RANGE.min);
+          [r, g, b] = rampColor(TEMPERATURE_RAMP, t);
+        }
+      } else if (resourceView) {
+        // Desaturated satellite base so the resource markers stand out.
+        [r, g, b] = satelliteColor(world, x, y, i);
+        const lum = 0.3 * r + 0.59 * g + 0.11 * b;
+        const mix = sea ? 0.55 : 0.82; // keep a hint of blue in the sea
+        r = r + (lum - r) * mix;
+        g = g + (lum - g) * mix;
+        b = b + (lum - b) * mix;
+        r *= 0.7; g *= 0.7; b *= 0.7;
+      } else {
+        // satellite
+        [r, g, b] = satelliteColor(world, x, y, i);
       }
 
       // Fill the TILE_PX x TILE_PX block
@@ -90,18 +151,29 @@ function renderWorld(world, canvas, view = 'terrain') {
 
   ctx.putImageData(img, 0, 0);
 
-  // Resource markers on top (terrain view only, to keep data views clean).
-  if (view === 'terrain') {
+  // Resource markers: all of them on the satellite view, a single filtered
+  // category (drawn larger, with an outline) on the resource views.
+  if (view === 'satellite' || resourceView) {
+    const filter = view === 'minerals' ? 'mineral'
+      : view === 'natural' ? 'natural' : null;
+    const radius = resourceView ? TILE_PX * 0.75 : TILE_PX * 0.42;
+
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
         const res = world.resources[y * size + x];
         if (!res) continue;
-        ctx.fillStyle = res.color;
+        if (filter && res.category !== filter) continue;
         const px = x * TILE_PX + TILE_PX / 2;
         const py = y * TILE_PX + TILE_PX / 2;
+        ctx.fillStyle = res.color;
         ctx.beginPath();
-        ctx.arc(px, py, TILE_PX * 0.42, 0, Math.PI * 2);
+        ctx.arc(px, py, radius, 0, Math.PI * 2);
         ctx.fill();
+        if (resourceView) {
+          ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+          ctx.lineWidth = 0.8;
+          ctx.stroke();
+        }
       }
     }
   }

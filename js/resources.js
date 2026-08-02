@@ -3,16 +3,18 @@
 // where they'd plausibly occur on Earth: ores in mountains, fish on coasts,
 // fertile soil along rivers, and so on.
 
+// category: 'natural' = living/renewable resources, 'mineral' = extractive
+// deposits. The map can be filtered to show either group on its own.
 const RESOURCES = {
-  FISH: { id: 'fish', name: 'Fish', color: '#5fc9e8', symbol: '◆' },
-  GAME: { id: 'game', name: 'Wild game', color: '#c98d5f', symbol: '▲' },
-  TIMBER: { id: 'timber', name: 'Timber', color: '#3e7a3e', symbol: '♠' },
-  FERTILE: { id: 'fertile', name: 'Fertile soil', color: '#d9c94a', symbol: '❋' },
-  STONE: { id: 'stone', name: 'Stone', color: '#a8a8b0', symbol: '■' },
-  COPPER: { id: 'copper', name: 'Copper ore', color: '#e08a3c', symbol: '●' },
-  IRON: { id: 'iron', name: 'Iron ore', color: '#8a4a4a', symbol: '●' },
-  CLAY: { id: 'clay', name: 'Clay', color: '#b06848', symbol: '▼' },
-  SALT: { id: 'salt', name: 'Salt', color: '#e8e8f0', symbol: '✦' },
+  FISH: { id: 'fish', name: 'Fish', color: '#5fc9e8', symbol: '◆', category: 'natural' },
+  GAME: { id: 'game', name: 'Wild game', color: '#c98d5f', symbol: '▲', category: 'natural' },
+  TIMBER: { id: 'timber', name: 'Timber', color: '#3e7a3e', symbol: '♠', category: 'natural' },
+  FERTILE: { id: 'fertile', name: 'Fertile soil', color: '#d9c94a', symbol: '❋', category: 'natural' },
+  STONE: { id: 'stone', name: 'Stone', color: '#a8a8b0', symbol: '■', category: 'mineral' },
+  COPPER: { id: 'copper', name: 'Copper ore', color: '#e08a3c', symbol: '●', category: 'mineral' },
+  IRON: { id: 'iron', name: 'Iron ore', color: '#8a4a4a', symbol: '●', category: 'mineral' },
+  CLAY: { id: 'clay', name: 'Clay', color: '#b06848', symbol: '▼', category: 'mineral' },
+  SALT: { id: 'salt', name: 'Salt', color: '#e8e8f0', symbol: '✦', category: 'mineral' },
 };
 
 function generateResources(world, rng) {

@@ -29,14 +29,27 @@ const ELEV = {
   PEAKS: 0.93,
 };
 
+// Unit conversions used for display and (later) simulation. Elevation above
+// sea level tops out around ~1150 m, comparable to the British uplands.
+function elevationToMeters(e) {
+  return Math.round((e - SEA_LEVEL) * 2 * 1300);
+}
+
+// Moisture 0..1 maps onto a UK-like annual rainfall range (~400-2800 mm).
+function moistureToRainfallMm(m) {
+  return Math.round(400 + m * 2400);
+}
+
 function generateTerrain(world, rng) {
   const { size } = world;
   const elevNoise = new ValueNoise(rng.fork('elevation'));
   const moistNoise = new ValueNoise(rng.fork('moisture'));
   const warpNoise = new ValueNoise(rng.fork('warp'));
+  const tempNoise = new ValueNoise(rng.fork('temperature'));
 
   const elevation = new Float32Array(size * size);
   const moisture = new Float32Array(size * size);
+  const temperature = new Float32Array(size * size);
 
   // The island's centre is jittered a little so coastlines vary run to run.
   const centerRng = rng.fork('center');
@@ -87,11 +100,26 @@ function generateTerrain(world, rng) {
       const alongWind = ((x - cx) * windX + (y - cy) * windY) / maxDist; // -1..1
       const windward = -alongWind * 0.15; // upwind side gets +, downwind -
       moisture[i] = Math.max(0, Math.min(1, mBase + windward));
+
+      // Average annual temperature (°C): warmer in the south (bottom of the
+      // map), cooling with altitude at ~6.5°C per 1000 m, plus local
+      // variation. The surrounding sea is thermally moderated.
+      const latFrac = y / size; // 0 = north edge, 1 = south edge
+      let t = 6.5 + 7.5 * latFrac;
+      if (e > SEA_LEVEL) {
+        const meters = (e - SEA_LEVEL) * 2 * 1300;
+        t -= meters * 0.0065;
+      } else {
+        t = 8.5 + 3.5 * latFrac; // sea surface, milder gradient
+      }
+      t += (tempNoise.fbm(x * freq * 2 + 200, y * freq * 2 + 200, 3) - 0.5) * 2;
+      temperature[i] = t;
     }
   }
 
   world.elevation = elevation;
   world.moisture = moisture;
+  world.temperature = temperature;
 
   classifyTerrain(world);
 }

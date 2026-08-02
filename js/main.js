@@ -9,6 +9,8 @@
   const tileInfo = document.getElementById('tile-info');
   const terrainLegend = document.getElementById('terrain-legend');
   const resourceLegend = document.getElementById('resource-legend');
+  const legendATitle = document.getElementById('legend-a-title');
+  const legendBTitle = document.getElementById('legend-b-title');
   const statsEl = document.getElementById('stats');
 
   let world = null;
@@ -18,31 +20,71 @@
     world = createWorld(seed);
     const ms = performance.now() - t0;
     seedInput.value = seed;
-    renderWorld(world, canvas, viewSelect.value);
-    renderLegends();
+    refreshView();
     renderStats(ms);
   }
 
-  function renderLegends() {
-    terrainLegend.innerHTML = '';
-    for (const [type, label] of Object.entries(TERRAIN_LABELS)) {
-      const [r, g, b] = TERRAIN_COLORS[type];
-      const row = document.createElement('div');
-      row.className = 'legend-row';
-      row.innerHTML =
-        `<span class="swatch" style="background: rgb(${r},${g},${b})"></span>` +
-        `<span>${label}</span>`;
-      terrainLegend.appendChild(row);
-    }
+  function refreshView() {
+    const view = viewSelect.value;
+    renderWorld(world, canvas, view);
+    renderLegends(view);
+  }
 
-    resourceLegend.innerHTML = '';
-    for (const res of Object.values(RESOURCES)) {
-      const row = document.createElement('div');
-      row.className = 'legend-row';
-      row.innerHTML =
+  function terrainSwatchRows() {
+    return Object.entries(TERRAIN_LABELS).map(([type, label]) => {
+      const [r, g, b] = TERRAIN_COLORS[type];
+      return `<div class="legend-row">` +
+        `<span class="swatch" style="background: rgb(${r},${g},${b})"></span>` +
+        `<span>${label}</span></div>`;
+    }).join('');
+  }
+
+  function resourceSwatchRows(category) {
+    return Object.values(RESOURCES)
+      .filter((res) => !category || res.category === category)
+      .map((res) =>
+        `<div class="legend-row">` +
         `<span class="swatch" style="background: ${res.color}; border-radius: 50%"></span>` +
-        `<span>${res.name}</span>`;
-      resourceLegend.appendChild(row);
+        `<span>${res.name}</span></div>`)
+      .join('');
+  }
+
+  function rampLegend(stops, minLabel, maxLabel) {
+    const colors = stops.map(([r, g, b]) => `rgb(${r},${g},${b})`).join(', ');
+    return `<div class="ramp-bar" style="background: linear-gradient(to right, ${colors})"></div>` +
+      `<div class="ramp-labels"><span>${minLabel}</span><span>${maxLabel}</span></div>`;
+  }
+
+  // The two sidebar legend sections adapt to the active view.
+  function renderLegends(view) {
+    if (view === 'rainfall') {
+      legendATitle.textContent = 'Avg annual rainfall';
+      terrainLegend.innerHTML = rampLegend(RAINFALL_RAMP,
+        `${RAINFALL_RANGE.min} mm`, `${RAINFALL_RANGE.max} mm`);
+      legendBTitle.textContent = '';
+      resourceLegend.innerHTML = '';
+    } else if (view === 'temperature') {
+      legendATitle.textContent = 'Avg annual temperature';
+      terrainLegend.innerHTML = rampLegend(TEMPERATURE_RAMP,
+        `${TEMPERATURE_RANGE.min}°C`, `${TEMPERATURE_RANGE.max}°C`);
+      legendBTitle.textContent = '';
+      resourceLegend.innerHTML = '';
+    } else if (view === 'natural') {
+      legendATitle.textContent = 'Natural resources';
+      terrainLegend.innerHTML = resourceSwatchRows('natural');
+      legendBTitle.textContent = '';
+      resourceLegend.innerHTML = '';
+    } else if (view === 'minerals') {
+      legendATitle.textContent = 'Mineral resources';
+      terrainLegend.innerHTML = resourceSwatchRows('mineral');
+      legendBTitle.textContent = '';
+      resourceLegend.innerHTML = '';
+    } else {
+      // satellite / elevation
+      legendATitle.textContent = 'Terrain';
+      terrainLegend.innerHTML = terrainSwatchRows();
+      legendBTitle.textContent = 'Resources';
+      resourceLegend.innerHTML = resourceSwatchRows();
     }
   }
 
@@ -66,9 +108,10 @@
     if (!tile) return 'Hover over the map to inspect a tile.';
     const parts = [];
     parts.push(`<strong>${TERRAIN_LABELS[tile.terrain]}</strong> at (${tile.x}, ${tile.y})`);
-    const meters = Math.round((tile.elevation - 0.5) * 2 * 1300); // crude m above sea level
+    const meters = elevationToMeters(tile.elevation);
     if (meters >= 0) parts.push(`Elevation ≈ ${meters} m`);
-    parts.push(`Moisture ${(tile.moisture * 100).toFixed(0)}%`);
+    parts.push(`Rainfall ≈ ${moistureToRainfallMm(tile.moisture).toLocaleString()} mm/yr`);
+    parts.push(`Avg temp ≈ ${tile.temperature.toFixed(1)}°C`);
     if (tile.resource) parts.push(`Resource: <strong>${tile.resource.name}</strong>`);
     return parts.join('<br>');
   }
@@ -99,7 +142,7 @@
   });
 
   viewSelect.addEventListener('change', () => {
-    if (world) renderWorld(world, canvas, viewSelect.value);
+    if (world) refreshView();
   });
 
   generate(randomSeedString());
