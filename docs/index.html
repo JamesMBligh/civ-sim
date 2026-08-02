@@ -139,6 +139,32 @@
     color: var(--text-dim);
     font-size: 12px;
   }
+  .tribe-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 0;
+  }
+  .tribe-row .tribe-meta {
+    margin-left: auto;
+    color: var(--text-dim);
+    font-size: 12px;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .tribe-row.dead { opacity: 0.45; text-decoration: line-through; }
+  #events-log {
+    background: var(--bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    max-height: 180px;
+    overflow-y: auto;
+    line-height: 1.45;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  #events-log .ev-year { color: var(--accent); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -149,9 +175,11 @@
     <input type="text" id="seed-input" spellcheck="false">
     <button id="generate-btn">Generate</button>
     <button id="random-btn" class="secondary">Random</button>
+    <button id="simulate-btn">Found tribes &amp; simulate 10 years</button>
     <label for="view-select">View</label>
     <select id="view-select">
       <option value="satellite">Satellite</option>
+      <option value="communities">Communities</option>
       <option value="elevation">Elevation</option>
       <option value="rainfall">Avg rainfall</option>
       <option value="temperature">Avg temperature</option>
@@ -167,6 +195,12 @@
   <aside>
     <h2>Inspect</h2>
     <div id="tile-info">Hover over the map to inspect a tile.</div>
+    <div id="tribes-section" style="display: none">
+      <h2>Tribes</h2>
+      <div id="tribes-panel"></div>
+      <h2>Chronicle</h2>
+      <div id="events-log"></div>
+    </div>
     <h2 id="legend-a-title">Terrain</h2>
     <div id="terrain-legend"></div>
     <h2 id="legend-b-title">Resources</h2>
@@ -870,6 +904,398 @@ function tileAt(world, x, y) {
   };
 }
 
+// ---- js/tribes.js ----
+// Tribe founding: scores the landscape for settlement suitability and
+// places a handful of primitive tribes at the best well-separated sites —
+// river valleys, fertile lowland and rich coasts, just where real early
+// peoples settled.
+
+const TRIBE_COLORS = [
+  '#e05555', '#4f8fe0', '#57c470', '#e0b03c',
+  '#a06ee0', '#e07fb0', '#4fc4c4', '#c4884f',
+];
+
+const NAME_STEMS = ['Ash', 'Bran', 'Cor', 'Dun', 'Elm', 'Fen', 'Gal', 'Hazel',
+  'Ith', 'Kel', 'Lor', 'Mor', 'Nav', 'Ost', 'Pel', 'Rin', 'Sul', 'Tor'];
+const NAME_SUFFIXES = ['folk', 'kin', 'clan', 'tribe', 'people'];
+
+function generateTribeName(rng, taken) {
+  for (let tries = 0; tries < 50; tries++) {
+    const name = `The ${rng.pick(NAME_STEMS)}${rng.pick(NAME_SUFFIXES)}`;
+    if (!taken.has(name)) {
+      taken.add(name);
+      return name;
+    }
+  }
+  return `The ${rng.pick(NAME_STEMS)}${rng.pick(NAME_SUFFIXES)}`;
+}
+
+// How attractive a tile is as a place to live. Used both for the initial
+// founding sites and for daughter settlements later on.
+function settlementScore(world, x, y) {
+  const { size, terrain, resources } = world;
+  const i = y * size + x;
+  const t = terrain[i];
+
+  const BASE = {
+    [TERRAIN.GRASSLAND]: 2.0,
+    [TERRAIN.PLAINS]: 1.6,
+    [TERRAIN.FOREST]: 1.0,
+    [TERRAIN.COAST]: 1.0,
+    [TERRAIN.MARSH]: 0.2,
+    [TERRAIN.HILLS]: 0.4,
+  };
+  if (!(t in BASE)) return -Infinity; // water, mountains, peaks: no camps
+  let score = BASE[t];
+
+  for (let dy = -3; dy <= 3; dy++) {
+    for (let dx = -3; dx <= 3; dx++) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+      const ni = ny * size + nx;
+      const nt = terrain[ni];
+      const close = Math.abs(dx) <= 1 && Math.abs(dy) <= 1;
+
+      if (nt === TERRAIN.RIVER) score += close ? 2.5 : 0.8;
+      else if (nt === TERRAIN.LAKE) score += close ? 1.5 : 0.5;
+      else if (isSea(nt)) score += close ? 0.8 : 0.2;
+
+      const res = resources[ni];
+      if (res) {
+        if (res.id === 'fertile') score += 1.2;
+        else if (res.id === 'fish') score += 0.9;
+        else if (res.id === 'game') score += 0.7;
+        else if (res.id === 'timber') score += 0.4;
+        else if (res.id === 'flint') score += 0.3;
+      }
+    }
+  }
+  return score;
+}
+
+function foundTribes(world, count = 7) {
+  const rng = new RNG(world.seed + ':tribes');
+  const { size } = world;
+  const MIN_SEPARATION = 26; // tiles (~100 km) between founding sites
+
+  // Score every eligible tile, then greedily take the best sites that
+  // keep their distance from already-chosen ones.
+  const scored = [];
+  for (let y = 4; y < size - 4; y++) {
+    for (let x = 4; x < size - 4; x++) {
+      const s = settlementScore(world, x, y);
+      if (s > 3) scored.push({ x, y, s });
+    }
+  }
+  scored.sort((a, b) => b.s - a.s);
+
+  const sites = [];
+  for (const cand of scored) {
+    if (sites.length >= count) break;
+    const ok = sites.every((p) => {
+      const dx = p.x - cand.x;
+      const dy = p.y - cand.y;
+      return dx * dx + dy * dy >= MIN_SEPARATION * MIN_SEPARATION;
+    });
+    if (ok) sites.push(cand);
+  }
+
+  const takenNames = new Set();
+  world.tribes = sites.map((site, idx) => {
+    const pop = rng.int(90, 160);
+    return {
+      id: idx,
+      name: generateTribeName(rng, takenNames),
+      color: TRIBE_COLORS[idx % TRIBE_COLORS.length],
+      settlements: [{ x: site.x, y: site.y, pop }],
+      alive: true,
+    };
+  });
+
+  world.year = 0;
+  world.events = [{
+    year: 0,
+    text: `${world.tribes.length} tribes arrived on the island and made their first camps.`,
+  }];
+  world.tensions = new Set();
+
+  computeInfluence(world);
+  return world.tribes;
+}
+
+function tribePopulation(tribe) {
+  return tribe.settlements.reduce((sum, s) => sum + s.pop, 0);
+}
+
+// ---- js/sim.js ----
+// The simulation: yearly ticks of tribal life. Each settlement gathers
+// food from the land around it; population grows toward the local carrying
+// capacity, large settlements bud off daughter camps, and each tribe's
+// influence spreads across the landscape as it grows.
+
+// How many people one tile can feed for a year (very roughly), given its
+// terrain and any food resource on it. Cached per world.
+function computeFoodValues(world) {
+  if (world.foodValue) return world.foodValue;
+  const { size, terrain, resources } = world;
+  const fv = new Float32Array(size * size);
+
+  const TERRAIN_FOOD = {
+    [TERRAIN.GRASSLAND]: 1.2,
+    [TERRAIN.PLAINS]: 1.0,
+    [TERRAIN.FOREST]: 1.4,   // foraging and hunting
+    [TERRAIN.COAST]: 0.8,
+    [TERRAIN.MARSH]: 0.6,    // wildfowl, eels
+    [TERRAIN.HILLS]: 0.5,
+    [TERRAIN.RIVER]: 2.0,
+    [TERRAIN.LAKE]: 1.5,
+    [TERRAIN.MOUNTAINS]: 0.1,
+  };
+
+  for (let i = 0; i < size * size; i++) {
+    let v = TERRAIN_FOOD[terrain[i]] || 0;
+    const res = resources[i];
+    if (res) {
+      if (res.id === 'fertile') v += 4;
+      else if (res.id === 'fish') v += 3;
+      else if (res.id === 'game') v += 2.5;
+      else if (res.id === 'timber') v += 0.5;
+    }
+    fv[i] = v;
+  }
+  world.foodValue = fv;
+  return fv;
+}
+
+function gatherRadius(pop) {
+  return 3 + Math.sqrt(Math.max(0, pop)) / 2.5;
+}
+
+// Carrying capacity of the land a settlement can reach.
+function settlementCapacity(world, s) {
+  const fv = computeFoodValues(world);
+  const { size } = world;
+  const r = gatherRadius(s.pop);
+  const ri = Math.ceil(r);
+  let cap = 0;
+  for (let dy = -ri; dy <= ri; dy++) {
+    for (let dx = -ri; dx <= ri; dx++) {
+      if (dx * dx + dy * dy > r * r) continue;
+      const nx = s.x + dx;
+      const ny = s.y + dy;
+      if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+      cap += fv[ny * size + nx];
+    }
+  }
+  return cap;
+}
+
+function simulateYears(world, years = 10) {
+  if (!world.tribes) foundTribes(world);
+  for (let k = 0; k < years; k++) {
+    simulateYear(world);
+  }
+  computeInfluence(world);
+}
+
+function simulateYear(world) {
+  world.year++;
+  const year = world.year;
+  const rng = new RNG(world.seed + ':year:' + year);
+  const log = (text) => world.events.push({ year, text });
+
+  // Island-wide season quality for the year.
+  const seasonRoll = rng.random();
+  let seasonFactor = 1;
+  if (seasonRoll < 0.15) {
+    seasonFactor = 0.75;
+    log('A harsh winter gripped the island; food ran short everywhere.');
+  } else if (seasonRoll > 0.85) {
+    seasonFactor = 1.2;
+    log('A mild year with rich harvests of forage and game.');
+  }
+
+  const GROWTH_RATE = 0.06;
+
+  for (const tribe of world.tribes) {
+    if (!tribe.alive) continue;
+
+    for (const s of tribe.settlements) {
+      const cap = Math.max(10, settlementCapacity(world, s) * seasonFactor);
+      // Logistic growth toward capacity; shrinks when over capacity.
+      const growth = GROWTH_RATE * s.pop * (1 - s.pop / cap);
+      s.pop = Math.max(0, s.pop + growth + rng.range(-2, 2));
+    }
+
+    // Founding daughter camps: a crowded settlement sends part of its
+    // people to the best nearby unclaimed ground.
+    const SPLIT_POP = 220;
+    for (const s of [...tribe.settlements]) {
+      if (s.pop < SPLIT_POP) continue;
+      const site = findDaughterSite(world, s, rng);
+      if (!site) continue;
+      const migrants = Math.round(s.pop * 0.4);
+      s.pop -= migrants;
+      tribe.settlements.push({ x: site.x, y: site.y, pop: migrants });
+      log(`${tribe.name} founded a new camp as their numbers grew.`);
+      break; // at most one new camp per tribe per year
+    }
+
+    // Abandon failed camps.
+    tribe.settlements = tribe.settlements.filter((s) => {
+      if (s.pop >= 12) return true;
+      log(`A dwindling camp of ${tribe.name} was abandoned.`);
+      return false;
+    });
+    if (tribe.settlements.length === 0) {
+      tribe.alive = false;
+      log(`${tribe.name} died out.`);
+    }
+  }
+
+  computeInfluence(world);
+  detectTensions(world, log);
+}
+
+// Pick a spot 8-16 tiles from the parent settlement with the best
+// settlement score, away from every existing settlement.
+function findDaughterSite(world, parent, rng) {
+  const { size } = world;
+  const MIN_DIST = 7;
+  let best = null;
+  let bestScore = 4; // don't settle marginal ground
+
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const angle = rng.range(0, Math.PI * 2);
+    const dist = rng.range(8, 16);
+    const x = Math.round(parent.x + Math.cos(angle) * dist);
+    const y = Math.round(parent.y + Math.sin(angle) * dist);
+    if (x < 4 || y < 4 || x >= size - 4 || y >= size - 4) continue;
+
+    let tooClose = false;
+    for (const tribe of world.tribes) {
+      for (const s of tribe.settlements) {
+        const dx = s.x - x;
+        const dy = s.y - y;
+        if (dx * dx + dy * dy < MIN_DIST * MIN_DIST) { tooClose = true; break; }
+      }
+      if (tooClose) break;
+    }
+    if (tooClose) continue;
+
+    const score = settlementScore(world, x, y);
+    if (score > bestScore) {
+      bestScore = score;
+      best = { x, y };
+    }
+  }
+  return best;
+}
+
+// Influence: each settlement projects strength that fades with distance;
+// every land tile is credited to whichever tribe is strongest there.
+// world.influenceOwner: Int16Array of tribe id (-1 = unclaimed)
+// world.influenceStrength: Float32Array 0..1 for display alpha
+function computeInfluence(world) {
+  const { size, terrain } = world;
+  const owner = new Int16Array(size * size).fill(-1);
+  const strength = new Float32Array(size * size);
+  if (!world.tribes) {
+    world.influenceOwner = owner;
+    world.influenceStrength = strength;
+    return;
+  }
+
+  // Accumulate per-tribe strength only where settlements reach: iterate
+  // each settlement's footprint instead of every tile x every settlement.
+  const tribeStrength = new Float32Array(size * size); // reused per tribe
+
+  for (const tribe of world.tribes) {
+    if (!tribe.alive) continue;
+    tribeStrength.fill(0);
+
+    for (const s of tribe.settlements) {
+      const reach = gatherRadius(s.pop) * 2.2;
+      const ri = Math.ceil(reach);
+      for (let dy = -ri; dy <= ri; dy++) {
+        for (let dx = -ri; dx <= ri; dx++) {
+          const nx = s.x + dx;
+          const ny = s.y + dy;
+          if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d > reach) continue;
+          const ni = ny * size + nx;
+          if (isSea(terrain[ni])) continue;
+          tribeStrength[ni] += s.pop * (1 - d / reach);
+        }
+      }
+    }
+
+    for (let i = 0; i < size * size; i++) {
+      const v = tribeStrength[i];
+      if (v > 0 && v > strength[i]) {
+        strength[i] = v;
+        owner[i] = tribe.id;
+      }
+    }
+  }
+
+  // Normalise strength into a display alpha.
+  for (let i = 0; i < size * size; i++) {
+    if (owner[i] >= 0) {
+      strength[i] = Math.min(1, strength[i] / 120);
+    }
+  }
+
+  world.influenceOwner = owner;
+  world.influenceStrength = strength;
+
+  // Territory sizes for the stats panel.
+  for (const tribe of world.tribes) tribe.territoryTiles = 0;
+  for (let i = 0; i < size * size; i++) {
+    if (owner[i] >= 0) {
+      const tribe = world.tribes[owner[i]];
+      if (tribe) tribe.territoryTiles++;
+    }
+  }
+}
+
+// Where two tribes press against each other, note the tension (once per
+// pair) — the seed of future conflict and trade mechanics.
+function detectTensions(world, log) {
+  const { size } = world;
+  const owner = world.influenceOwner;
+  const contested = new Map(); // "a-b" -> count of border tiles
+
+  for (let y = 1; y < size - 1; y++) {
+    for (let x = 1; x < size - 1; x++) {
+      const a = owner[y * size + x];
+      if (a < 0) continue;
+      const b1 = owner[y * size + x + 1];
+      const b2 = owner[(y + 1) * size + x];
+      for (const b of [b1, b2]) {
+        if (b >= 0 && b !== a) {
+          const key = a < b ? `${a}-${b}` : `${b}-${a}`;
+          contested.set(key, (contested.get(key) || 0) + 1);
+        }
+      }
+    }
+  }
+
+  for (const [key, count] of contested) {
+    if (count >= 25 && !world.tensions.has(key)) {
+      world.tensions.add(key);
+      const [a, b] = key.split('-').map(Number);
+      const ta = world.tribes[a];
+      const tb = world.tribes[b];
+      if (ta && tb && ta.alive && tb.alive) {
+        log(`${ta.name} and ${tb.name} now share a border; there is tension between them.`);
+      }
+    }
+  }
+}
+
 // ---- js/render.js ----
 // Canvas rendering: draws the world at a fixed pixel scale with three view
 // modes (terrain, elevation, moisture) and resource markers.
@@ -940,6 +1366,14 @@ const TEMPERATURE_RAMP = [
   [190, 40, 40],    // hot: red
 ];
 
+function hexToRgb(hex) {
+  return [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ];
+}
+
 function satelliteColor(world, x, y, i) {
   const t = world.terrain[i];
   let [r, g, b] = TERRAIN_COLORS[t] || [255, 0, 255];
@@ -965,6 +1399,7 @@ function renderWorld(world, canvas, view = 'satellite') {
   const data = img.data;
 
   const resourceView = view === 'minerals' || view === 'natural';
+  const tribeRgb = (world.tribes || []).map((t) => hexToRgb(t.color));
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -1006,6 +1441,23 @@ function renderWorld(world, canvas, view = 'satellite') {
         g = g + (lum - g) * mix;
         b = b + (lum - b) * mix;
         r *= 0.7; g *= 0.7; b *= 0.7;
+      } else if (view === 'communities') {
+        // Muted satellite base tinted by whichever tribe holds the tile.
+        [r, g, b] = satelliteColor(world, x, y, i);
+        const lum = 0.3 * r + 0.59 * g + 0.11 * b;
+        const mix = sea ? 0.4 : 0.65;
+        r = (r + (lum - r) * mix) * 0.8;
+        g = (g + (lum - g) * mix) * 0.8;
+        b = (b + (lum - b) * mix) * 0.8;
+
+        const ownerId = world.influenceOwner ? world.influenceOwner[i] : -1;
+        if (ownerId >= 0 && tribeRgb[ownerId]) {
+          const a = 0.2 + world.influenceStrength[i] * 0.45;
+          const [tr, tg, tb] = tribeRgb[ownerId];
+          r = r * (1 - a) + tr * a;
+          g = g * (1 - a) + tg * a;
+          b = b * (1 - a) + tb * a;
+        }
       } else {
         // satellite
         [r, g, b] = satelliteColor(world, x, y, i);
@@ -1050,6 +1502,37 @@ function renderWorld(world, canvas, view = 'satellite') {
       }
     }
   }
+
+  // Settlements: drawn on the satellite and communities views. Marker size
+  // scales with population; the communities view also labels each tribe at
+  // its first (founding) settlement.
+  if ((view === 'satellite' || view === 'communities') && world.tribes) {
+    for (const tribe of world.tribes) {
+      if (!tribe.alive) continue;
+      tribe.settlements.forEach((s, idx) => {
+        const px = s.x * TILE_PX + TILE_PX / 2;
+        const py = s.y * TILE_PX + TILE_PX / 2;
+        const radius = 2.5 + Math.sqrt(s.pop) / 5;
+        ctx.fillStyle = tribe.color;
+        ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.arc(px, py, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        if (view === 'communities' && idx === 0) {
+          ctx.font = 'bold 12px system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+          ctx.strokeText(tribe.name, px, py - radius - 5);
+          ctx.fillStyle = '#fff';
+          ctx.fillText(tribe.name, px, py - radius - 5);
+        }
+      });
+    }
+  }
 }
 
 // ---- js/main.js ----
@@ -1067,6 +1550,10 @@ function renderWorld(world, canvas, view = 'satellite') {
   const legendATitle = document.getElementById('legend-a-title');
   const legendBTitle = document.getElementById('legend-b-title');
   const statsEl = document.getElementById('stats');
+  const simulateBtn = document.getElementById('simulate-btn');
+  const tribesSection = document.getElementById('tribes-section');
+  const tribesPanel = document.getElementById('tribes-panel');
+  const eventsLog = document.getElementById('events-log');
 
   let world = null;
 
@@ -1075,8 +1562,51 @@ function renderWorld(world, canvas, view = 'satellite') {
     world = createWorld(seed);
     const ms = performance.now() - t0;
     seedInput.value = seed;
+    simulateBtn.textContent = 'Found tribes & simulate 10 years';
+    tribesSection.style.display = 'none';
+    if (viewSelect.value === 'communities') viewSelect.value = 'satellite';
     refreshView();
     renderStats(ms);
+  }
+
+  function simulate() {
+    const firstRun = !world.tribes;
+    if (firstRun) foundTribes(world);
+    simulateYears(world, 10);
+    simulateBtn.textContent = 'Simulate 10 more years';
+    tribesSection.style.display = '';
+    if (firstRun) viewSelect.value = 'communities';
+    refreshView();
+    renderStats();
+    renderTribes();
+    renderEvents();
+  }
+
+  function renderTribes() {
+    const kmPerTile = world.kmPerTile;
+    tribesPanel.innerHTML = world.tribes
+      .slice()
+      .sort((a, b) => tribePopulation(b) - tribePopulation(a))
+      .map((t) => {
+        const pop = Math.round(tribePopulation(t));
+        const territory = ((t.territoryTiles || 0) * kmPerTile * kmPerTile).toLocaleString();
+        const meta = t.alive
+          ? `${pop.toLocaleString()} people · ${t.settlements.length} camp${t.settlements.length > 1 ? 's' : ''}<br>${territory} km²`
+          : 'died out';
+        return `<div class="tribe-row${t.alive ? '' : ' dead'}">` +
+          `<span class="swatch" style="background: ${t.color}"></span>` +
+          `<span>${t.name}</span>` +
+          `<span class="tribe-meta">${meta}</span></div>`;
+      })
+      .join('');
+  }
+
+  function renderEvents() {
+    eventsLog.innerHTML = world.events
+      .slice(-60)
+      .reverse()
+      .map((e) => `<div><span class="ev-year">Yr ${e.year}</span> ${e.text}</div>`)
+      .join('');
   }
 
   function refreshView() {
@@ -1134,6 +1664,16 @@ function renderWorld(world, canvas, view = 'satellite') {
       terrainLegend.innerHTML = resourceSwatchRows('mineral');
       legendBTitle.textContent = '';
       resourceLegend.innerHTML = '';
+    } else if (view === 'communities') {
+      legendATitle.textContent = 'Communities';
+      terrainLegend.innerHTML = world.tribes
+        ? world.tribes.map((t) =>
+            `<div class="legend-row${t.alive ? '' : '" style="opacity:0.45'}">` +
+            `<span class="swatch" style="background: ${t.color}"></span>` +
+            `<span>${t.name}</span></div>`).join('')
+        : '<div class="legend-row">No tribes yet — press the simulate button.</div>';
+      legendBTitle.textContent = '';
+      resourceLegend.innerHTML = '';
     } else {
       // satellite / elevation
       legendATitle.textContent = 'Terrain';
@@ -1146,13 +1686,20 @@ function renderWorld(world, canvas, view = 'satellite') {
   function renderStats(genMs) {
     const s = world.stats;
     const rows = [];
+    if (world.tribes) {
+      rows.push(['Year', world.year]);
+      const alive = world.tribes.filter((t) => t.alive);
+      const totalPop = Math.round(alive.reduce((sum, t) => sum + tribePopulation(t), 0));
+      rows.push(['Tribes', `${alive.length} of ${world.tribes.length}`]);
+      rows.push(['Population', totalPop.toLocaleString()]);
+    }
     rows.push(['Land area', `${s.landAreaKm2.toLocaleString()} km²`]);
     rows.push(['Land cover', `${s.landPercent.toFixed(1)}%`]);
     const riverTiles = s.terrainCounts[TERRAIN.RIVER] || 0;
     rows.push(['River tiles', riverTiles.toLocaleString()]);
     const resTotal = Object.values(s.resourceCounts).reduce((a, b) => a + b, 0);
     rows.push(['Resource sites', resTotal.toLocaleString()]);
-    rows.push(['Generated in', `${genMs.toFixed(0)} ms`]);
+    if (genMs !== undefined) rows.push(['Generated in', `${genMs.toFixed(0)} ms`]);
 
     statsEl.innerHTML = rows
       .map(([k, v]) => `<div class="stat-row"><span>${k}</span><span class="value">${v}</span></div>`)
@@ -1168,6 +1715,12 @@ function renderWorld(world, canvas, view = 'satellite') {
     parts.push(`Rainfall ≈ ${moistureToRainfallMm(tile.moisture).toLocaleString()} mm/yr`);
     parts.push(`Avg temp ≈ ${tile.temperature.toFixed(1)}°C`);
     if (tile.resource) parts.push(`Resource: <strong>${tile.resource.name}</strong>`);
+    if (world.influenceOwner) {
+      const ownerId = world.influenceOwner[tile.y * world.size + tile.x];
+      if (ownerId >= 0 && world.tribes[ownerId]) {
+        parts.push(`Territory of <strong>${world.tribes[ownerId].name}</strong>`);
+      }
+    }
     return parts.join('<br>');
   }
 
@@ -1191,6 +1744,10 @@ function renderWorld(world, canvas, view = 'satellite') {
   });
 
   randomBtn.addEventListener('click', () => generate(randomSeedString()));
+
+  simulateBtn.addEventListener('click', () => {
+    if (world) simulate();
+  });
 
   seedInput.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter') generateBtn.click();

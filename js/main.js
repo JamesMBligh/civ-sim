@@ -12,6 +12,10 @@
   const legendATitle = document.getElementById('legend-a-title');
   const legendBTitle = document.getElementById('legend-b-title');
   const statsEl = document.getElementById('stats');
+  const simulateBtn = document.getElementById('simulate-btn');
+  const tribesSection = document.getElementById('tribes-section');
+  const tribesPanel = document.getElementById('tribes-panel');
+  const eventsLog = document.getElementById('events-log');
 
   let world = null;
 
@@ -20,8 +24,51 @@
     world = createWorld(seed);
     const ms = performance.now() - t0;
     seedInput.value = seed;
+    simulateBtn.textContent = 'Found tribes & simulate 10 years';
+    tribesSection.style.display = 'none';
+    if (viewSelect.value === 'communities') viewSelect.value = 'satellite';
     refreshView();
     renderStats(ms);
+  }
+
+  function simulate() {
+    const firstRun = !world.tribes;
+    if (firstRun) foundTribes(world);
+    simulateYears(world, 10);
+    simulateBtn.textContent = 'Simulate 10 more years';
+    tribesSection.style.display = '';
+    if (firstRun) viewSelect.value = 'communities';
+    refreshView();
+    renderStats();
+    renderTribes();
+    renderEvents();
+  }
+
+  function renderTribes() {
+    const kmPerTile = world.kmPerTile;
+    tribesPanel.innerHTML = world.tribes
+      .slice()
+      .sort((a, b) => tribePopulation(b) - tribePopulation(a))
+      .map((t) => {
+        const pop = Math.round(tribePopulation(t));
+        const territory = ((t.territoryTiles || 0) * kmPerTile * kmPerTile).toLocaleString();
+        const meta = t.alive
+          ? `${pop.toLocaleString()} people · ${t.settlements.length} camp${t.settlements.length > 1 ? 's' : ''}<br>${territory} km²`
+          : 'died out';
+        return `<div class="tribe-row${t.alive ? '' : ' dead'}">` +
+          `<span class="swatch" style="background: ${t.color}"></span>` +
+          `<span>${t.name}</span>` +
+          `<span class="tribe-meta">${meta}</span></div>`;
+      })
+      .join('');
+  }
+
+  function renderEvents() {
+    eventsLog.innerHTML = world.events
+      .slice(-60)
+      .reverse()
+      .map((e) => `<div><span class="ev-year">Yr ${e.year}</span> ${e.text}</div>`)
+      .join('');
   }
 
   function refreshView() {
@@ -79,6 +126,16 @@
       terrainLegend.innerHTML = resourceSwatchRows('mineral');
       legendBTitle.textContent = '';
       resourceLegend.innerHTML = '';
+    } else if (view === 'communities') {
+      legendATitle.textContent = 'Communities';
+      terrainLegend.innerHTML = world.tribes
+        ? world.tribes.map((t) =>
+            `<div class="legend-row${t.alive ? '' : '" style="opacity:0.45'}">` +
+            `<span class="swatch" style="background: ${t.color}"></span>` +
+            `<span>${t.name}</span></div>`).join('')
+        : '<div class="legend-row">No tribes yet — press the simulate button.</div>';
+      legendBTitle.textContent = '';
+      resourceLegend.innerHTML = '';
     } else {
       // satellite / elevation
       legendATitle.textContent = 'Terrain';
@@ -91,13 +148,20 @@
   function renderStats(genMs) {
     const s = world.stats;
     const rows = [];
+    if (world.tribes) {
+      rows.push(['Year', world.year]);
+      const alive = world.tribes.filter((t) => t.alive);
+      const totalPop = Math.round(alive.reduce((sum, t) => sum + tribePopulation(t), 0));
+      rows.push(['Tribes', `${alive.length} of ${world.tribes.length}`]);
+      rows.push(['Population', totalPop.toLocaleString()]);
+    }
     rows.push(['Land area', `${s.landAreaKm2.toLocaleString()} km²`]);
     rows.push(['Land cover', `${s.landPercent.toFixed(1)}%`]);
     const riverTiles = s.terrainCounts[TERRAIN.RIVER] || 0;
     rows.push(['River tiles', riverTiles.toLocaleString()]);
     const resTotal = Object.values(s.resourceCounts).reduce((a, b) => a + b, 0);
     rows.push(['Resource sites', resTotal.toLocaleString()]);
-    rows.push(['Generated in', `${genMs.toFixed(0)} ms`]);
+    if (genMs !== undefined) rows.push(['Generated in', `${genMs.toFixed(0)} ms`]);
 
     statsEl.innerHTML = rows
       .map(([k, v]) => `<div class="stat-row"><span>${k}</span><span class="value">${v}</span></div>`)
@@ -113,6 +177,12 @@
     parts.push(`Rainfall ≈ ${moistureToRainfallMm(tile.moisture).toLocaleString()} mm/yr`);
     parts.push(`Avg temp ≈ ${tile.temperature.toFixed(1)}°C`);
     if (tile.resource) parts.push(`Resource: <strong>${tile.resource.name}</strong>`);
+    if (world.influenceOwner) {
+      const ownerId = world.influenceOwner[tile.y * world.size + tile.x];
+      if (ownerId >= 0 && world.tribes[ownerId]) {
+        parts.push(`Territory of <strong>${world.tribes[ownerId].name}</strong>`);
+      }
+    }
     return parts.join('<br>');
   }
 
@@ -136,6 +206,10 @@
   });
 
   randomBtn.addEventListener('click', () => generate(randomSeedString()));
+
+  simulateBtn.addEventListener('click', () => {
+    if (world) simulate();
+  });
 
   seedInput.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter') generateBtn.click();

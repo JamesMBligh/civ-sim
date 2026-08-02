@@ -42,6 +42,32 @@ python3 -m http.server 8000
 # then visit http://localhost:8000
 ```
 
+## Current stage: primitive tribes
+
+Press **Found tribes & simulate 10 years** to introduce 7 tribes at the
+most attractive sites on the island (river valleys, fertile lowland,
+rich coasts — scored the way early peoples actually chose ground) and
+run ten years of activity. Press again to run further decades.
+
+Each simulated year:
+
+- Every settlement gathers food from the land within its reach; the
+  local mix of fertile soil, fish, game and river frontage sets a
+  carrying capacity, and population grows (or shrinks) toward it.
+- Mild years and harsh winters sweep the whole island, echoing through
+  the chronicle.
+- A crowded settlement buds off a daughter camp on the best nearby
+  unclaimed ground; failed camps are abandoned, and a tribe with no
+  camps left dies out.
+- Each tribe projects influence around its settlements — stronger with
+  population, fading with distance. The **Communities** view paints
+  every tile with the colour of whichever tribe holds it, and the
+  chronicle notes when two tribes' territories meet.
+
+The sidebar shows each tribe's population, camps and territory, plus a
+chronicle of notable events. Simulation is deterministic per seed, like
+the landscape itself.
+
 ## Built version & GitHub Pages
 
 `node build.js` bundles the app into a single self-contained
@@ -57,8 +83,10 @@ folder.
 
 - **Seed** — type a seed and press Generate to recreate a specific island.
 - **Random** — generate a fresh island with a new seed.
-- **View** — switch between six map layers:
+- **View** — switch between seven map layers:
   - *Satellite* — terrain with hillshading and all resource markers
+  - *Communities* — the extent of each tribe's influence, with camps
+    and tribe names
   - *Elevation* — raw heightmap (ocean depths to peaks)
   - *Avg rainfall* — annual rainfall from moisture (400–2800 mm)
   - *Avg temperature* — annual mean temperature (latitude + altitude)
@@ -80,13 +108,15 @@ folder.
 | `js/resources.js` | Terrain-aware resource placement |
 | `js/world.js` | World state container and generation pipeline |
 | `js/render.js` | Canvas rendering (terrain / elevation / moisture) |
+| `js/tribes.js` | Tribe founding: site scoring, names, colors |
+| `js/sim.js` | Yearly simulation: food, growth, expansion, influence |
 | `js/main.js` | UI wiring |
 | `build.js` | Bundles everything into `docs/index.html` for GitHub Pages |
 
 ## Roadmap
 
-1. ✅ Landscape generation (this stage)
-2. Introduce primitive tribes at plausible starting locations
-3. Simulate ten years of activity (foraging, settlement, growth)
+1. ✅ Landscape generation
+2. ✅ Introduce primitive tribes at plausible starting locations
+3. ✅ Simulate ten years of activity (foraging, settlement, growth)
 4. Let the user intervene and observe the consequences
 5. Deepen the model over time (agriculture, trade, conflict, culture…)

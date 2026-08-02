@@ -67,6 +67,14 @@ const TEMPERATURE_RAMP = [
   [190, 40, 40],    // hot: red
 ];
 
+function hexToRgb(hex) {
+  return [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ];
+}
+
 function satelliteColor(world, x, y, i) {
   const t = world.terrain[i];
   let [r, g, b] = TERRAIN_COLORS[t] || [255, 0, 255];
@@ -92,6 +100,7 @@ function renderWorld(world, canvas, view = 'satellite') {
   const data = img.data;
 
   const resourceView = view === 'minerals' || view === 'natural';
+  const tribeRgb = (world.tribes || []).map((t) => hexToRgb(t.color));
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -133,6 +142,23 @@ function renderWorld(world, canvas, view = 'satellite') {
         g = g + (lum - g) * mix;
         b = b + (lum - b) * mix;
         r *= 0.7; g *= 0.7; b *= 0.7;
+      } else if (view === 'communities') {
+        // Muted satellite base tinted by whichever tribe holds the tile.
+        [r, g, b] = satelliteColor(world, x, y, i);
+        const lum = 0.3 * r + 0.59 * g + 0.11 * b;
+        const mix = sea ? 0.4 : 0.65;
+        r = (r + (lum - r) * mix) * 0.8;
+        g = (g + (lum - g) * mix) * 0.8;
+        b = (b + (lum - b) * mix) * 0.8;
+
+        const ownerId = world.influenceOwner ? world.influenceOwner[i] : -1;
+        if (ownerId >= 0 && tribeRgb[ownerId]) {
+          const a = 0.2 + world.influenceStrength[i] * 0.45;
+          const [tr, tg, tb] = tribeRgb[ownerId];
+          r = r * (1 - a) + tr * a;
+          g = g * (1 - a) + tg * a;
+          b = b * (1 - a) + tb * a;
+        }
       } else {
         // satellite
         [r, g, b] = satelliteColor(world, x, y, i);
@@ -175,6 +201,37 @@ function renderWorld(world, canvas, view = 'satellite') {
           ctx.stroke();
         }
       }
+    }
+  }
+
+  // Settlements: drawn on the satellite and communities views. Marker size
+  // scales with population; the communities view also labels each tribe at
+  // its first (founding) settlement.
+  if ((view === 'satellite' || view === 'communities') && world.tribes) {
+    for (const tribe of world.tribes) {
+      if (!tribe.alive) continue;
+      tribe.settlements.forEach((s, idx) => {
+        const px = s.x * TILE_PX + TILE_PX / 2;
+        const py = s.y * TILE_PX + TILE_PX / 2;
+        const radius = 2.5 + Math.sqrt(s.pop) / 5;
+        ctx.fillStyle = tribe.color;
+        ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.arc(px, py, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        if (view === 'communities' && idx === 0) {
+          ctx.font = 'bold 12px system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+          ctx.strokeText(tribe.name, px, py - radius - 5);
+          ctx.fillStyle = '#fff';
+          ctx.fillText(tribe.name, px, py - radius - 5);
+        }
+      });
     }
   }
 }

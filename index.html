@@ -139,6 +139,32 @@
     color: var(--text-dim);
     font-size: 12px;
   }
+  .tribe-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 0;
+  }
+  .tribe-row .tribe-meta {
+    margin-left: auto;
+    color: var(--text-dim);
+    font-size: 12px;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .tribe-row.dead { opacity: 0.45; text-decoration: line-through; }
+  #events-log {
+    background: var(--bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    max-height: 180px;
+    overflow-y: auto;
+    line-height: 1.45;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  #events-log .ev-year { color: var(--accent); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -149,9 +175,11 @@
     <input type="text" id="seed-input" spellcheck="false">
     <button id="generate-btn">Generate</button>
     <button id="random-btn" class="secondary">Random</button>
+    <button id="simulate-btn">Found tribes &amp; simulate 10 years</button>
     <label for="view-select">View</label>
     <select id="view-select">
       <option value="satellite">Satellite</option>
+      <option value="communities">Communities</option>
       <option value="elevation">Elevation</option>
       <option value="rainfall">Avg rainfall</option>
       <option value="temperature">Avg temperature</option>
@@ -167,6 +195,12 @@
   <aside>
     <h2>Inspect</h2>
     <div id="tile-info">Hover over the map to inspect a tile.</div>
+    <div id="tribes-section" style="display: none">
+      <h2>Tribes</h2>
+      <div id="tribes-panel"></div>
+      <h2>Chronicle</h2>
+      <div id="events-log"></div>
+    </div>
     <h2 id="legend-a-title">Terrain</h2>
     <div id="terrain-legend"></div>
     <h2 id="legend-b-title">Resources</h2>
@@ -181,6 +215,8 @@
 <script src="js/rivers.js"></script>
 <script src="js/resources.js"></script>
 <script src="js/world.js"></script>
+<script src="js/tribes.js"></script>
+<script src="js/sim.js"></script>
 <script src="js/render.js"></script>
 <script src="js/main.js"></script>
 </body>
